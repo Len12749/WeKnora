@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	askTimeout             = 4 * time.Minute
+	askTimeout             = 8 * time.Minute
 	askCompleteWaitTimeout = 15 * time.Second
 	askSessionTitleMaxLen  = 60
 	askChannel             = "mcp"
