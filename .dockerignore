@@ -39,6 +39,8 @@ temp/
 # 本地构建产物 / 二进制
 WeKnora
 WeKnora-lite
+# Lite 镜像直接打包仓内编译好的二进制，故例外保留
+!WeKnora-lite
 /server
 /dist/
 /build/
