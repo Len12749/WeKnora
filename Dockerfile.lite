@@ -1,0 +1,19 @@
+# WeKnora Lite 运行时：Debian 12（与构建环境同源，规避 libstdc++/glibc 版本错配）
+FROM docker.1ms.run/library/debian:12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsqlite3-0 ca-certificates tzdata curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --chown=1000:1000 WeKnora-lite /app/WeKnora-lite
+COPY --chown=1000:1000 config /app/config
+COPY --chown=1000:1000 web /app/web
+COPY --chown=1000:1000 migrations /app/migrations
+COPY --chown=1000:1000 dataset/samples /app/dataset/samples
+COPY vendor-jieba/yanyiwu /go/pkg/mod/github.com/yanyiwu
+RUN chmod +x /app/WeKnora-lite && mkdir -p /app/data /app/logs && chown -R 1000:1000 /app/data /app/logs
+
+USER 1000:1000
+EXPOSE 8080
+CMD ["./WeKnora-lite"]
