@@ -769,6 +769,62 @@ func (a *Adapter) streamingUpdateCard(ctx context.Context, outTrackID, content s
 	return err
 }
 
+// updateCardInstance 用卡片实例接口整体覆盖模板变量。
+// 非流式模板（MarkdownBlock.isStreaming=false）不走 /card/streaming，
+// 而是通过这里写入 content 与 flowStatus。
+func (a *Adapter) updateCardInstance(ctx context.Context, outTrackID string, params map[string]string) error {
+	body := map[string]interface{}{
+		"outTrackId": outTrackID,
+		"cardData": map[string]interface{}{
+			"cardParamMap": params,
+		},
+		"cardUpdateOptions": map[string]bool{"updateCardDataByKey": true},
+	}
+	_, err := a.dingtalkAPI(ctx, http.MethodPut, "/v1.0/card/instances", body)
+	return err
+}
+
+// webhookMarkdownChunk is the safe per-message size for DingTalk markdown
+// messages; the API rejects oversized payloads.
+const webhookMarkdownChunk = 3000
+
+// sendWebhookMarkdown posts content through the session webhook, splitting long
+// answers on line boundaries so nothing is silently dropped.
+func (a *Adapter) sendWebhookMarkdown(ctx context.Context, webhookURL, content string) {
+	for _, part := range splitMarkdownChunks(content, webhookMarkdownChunk) {
+		if err := a.replyViaSessionWebhook(ctx, webhookURL, part); err != nil {
+			logger.Warnf(ctx, "[DingTalk] Webhook markdown fallback failed: %v", err)
+			return
+		}
+	}
+}
+
+// splitMarkdownChunks cuts s into pieces of at most max runes, preferring the
+// last newline inside each window.
+func splitMarkdownChunks(s string, max int) []string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return []string{s}
+	}
+	var out []string
+	for len(runes) > 0 {
+		if len(runes) <= max {
+			out = append(out, string(runes))
+			break
+		}
+		cut := max
+		for i := max; i > max/2; i-- {
+			if runes[i] == '\n' {
+				cut = i + 1
+				break
+			}
+		}
+		out = append(out, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	return out
+}
+
 // ── StreamSender implementation ──
 
 type streamState struct {
@@ -892,21 +948,27 @@ func (a *Adapter) FinalizeStream(ctx context.Context, incoming *im.IncomingMessa
 		return nil
 	}
 
-	// 一次性提交完整内容并收尾：生成过程中不推送，避免客户端逐字追帧。
-	// 卡片接口对超长或复杂正文偶尔返回 500，重试一次仍失败就退回普通消息，
-	// 保证用户一定能看到回答。
-	err := a.streamingUpdateCard(ctx, outTrackID, finalContent, true)
+	// 非流式模板：一次性写入完整内容并标记完成，避免客户端逐字追帧。
+	params := map[string]string{"content": finalContent, "flowStatus": "3"}
+	err := a.updateCardInstance(ctx, outTrackID, params)
 	if err != nil {
-		logger.Warnf(ctx, "[DingTalk] Card finalize failed (bytes=%d), retrying: %v", len(finalContent), err)
+		logger.Warnf(ctx, "[DingTalk] Card instance update failed (bytes=%d), retrying: %v", len(finalContent), err)
 		time.Sleep(300 * time.Millisecond)
+		err = a.updateCardInstance(ctx, outTrackID, params)
+	}
+	if err != nil {
+		// 实例接口也失败时退回流式接口，模板若支持仍能显示
+		logger.Warnf(ctx, "[DingTalk] Card instance update failed twice, trying streaming: %v", err)
 		err = a.streamingUpdateCard(ctx, outTrackID, finalContent, true)
 	}
 	if err != nil {
-		logger.Warnf(ctx, "[DingTalk] Card finalize failed twice (bytes=%d), falling back to markdown: %v", len(finalContent), err)
+		logger.Warnf(ctx, "[DingTalk] Card update failed (bytes=%d), falling back to markdown: %v", len(finalContent), err)
 		state.mu.Lock()
 		state.finalized = true
 		state.mu.Unlock()
-		_ = a.streamingUpdateCard(ctx, outTrackID, "回答较长，完整内容见下一条消息。", true)
+		_ = a.updateCardInstance(ctx, outTrackID, map[string]string{
+			"content": "回答较长，完整内容见下一条消息。", "flowStatus": "3",
+		})
 		if sessionWebhook != "" {
 			a.sendWebhookMarkdown(ctx, sessionWebhook, finalContent)
 		}
@@ -917,47 +979,6 @@ func (a *Adapter) FinalizeStream(ctx context.Context, incoming *im.IncomingMessa
 	state.finalized = true
 	state.mu.Unlock()
 	return nil
-}
-
-// webhookMarkdownChunk is the safe per-message size for DingTalk markdown
-// messages (the API rejects oversized payloads).
-const webhookMarkdownChunk = 3000
-
-// sendWebhookMarkdown posts content through the session webhook, splitting long
-// answers on line boundaries so nothing is silently dropped.
-func (a *Adapter) sendWebhookMarkdown(ctx context.Context, webhookURL, content string) {
-	for _, part := range splitMarkdownChunks(content, webhookMarkdownChunk) {
-		if err := a.replyViaSessionWebhook(ctx, webhookURL, part); err != nil {
-			logger.Warnf(ctx, "[DingTalk] Webhook markdown fallback failed: %v", err)
-			return
-		}
-	}
-}
-
-// splitMarkdownChunks cuts s into pieces of at most max runes, preferring the
-// last newline inside each window.
-func splitMarkdownChunks(s string, max int) []string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return []string{s}
-	}
-	var out []string
-	for len(runes) > 0 {
-		if len(runes) <= max {
-			out = append(out, string(runes))
-			break
-		}
-		cut := max
-		for i := max; i > max/2; i-- {
-			if runes[i] == '\n' {
-				cut = i + 1
-				break
-			}
-		}
-		out = append(out, string(runes[:cut]))
-		runes = runes[cut:]
-	}
-	return out
 }
 
 func (a *Adapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
@@ -983,8 +1004,8 @@ func (a *Adapter) EndStream(ctx context.Context, incoming *im.IncomingMessage, s
 
 	if outTrackID != "" {
 		if !finalized {
-			if err := a.streamingUpdateCard(ctx, outTrackID, fullContent, true); err != nil {
-				logger.Warnf(ctx, "[DingTalk] Failed to finalize card stream: %v", err)
+			if err := a.updateCardInstance(ctx, outTrackID, map[string]string{"content": fullContent, "flowStatus": "3"}); err != nil {
+				logger.Warnf(ctx, "[DingTalk] Failed to finalize card instance: %v", err)
 			}
 		}
 	} else if sessionWebhook != "" {
