@@ -162,10 +162,10 @@ func imCitationRefOf(tag string) imCitationRef {
 	return imCitationRef{label: title, link: url}
 }
 
-// imCitationMarker renders the inline [n] marker. It stays plain text so the
-// answer body reads the same on every channel; links live in the source list.
+// imCitationMarker renders the inline [n] marker. IM 里没有引用芯片，
+// 加粗可以让编号从正文里跳出来；前后由调用方留空格。
 func imCitationMarker(num int) string {
-	return "[" + strconv.Itoa(num) + "]"
+	return "**[" + strconv.Itoa(num) + "]**"
 }
 
 // imCitationListEntry renders one 参考来源 line.
@@ -214,14 +214,34 @@ func renderIMCitations(s string) string {
 		if num == prevNum && strings.TrimSpace(gap) == "" {
 			continue
 		}
+		if prevNum != 0 {
+			// 上一个标记后面已经补过空格，这里吃掉重复的空白
+			gap = strings.TrimLeft(gap, " \t")
+		}
 		b.WriteString(gap)
+		// 标记前后各留一个空格，避免和中文贴在一起
+		if tail := b.String(); tail != "" {
+			switch tail[len(tail)-1] {
+			case ' ', '\n', '\t':
+			default:
+				b.WriteString(" ")
+			}
+		}
 		b.WriteString(imCitationMarker(num))
+		b.WriteString(" ")
 		prevNum = num
 	}
-	b.WriteString(s[last:])
-	if len(refs) == 0 {
-		return b.String()
+	tail := s[last:]
+	if prevNum != 0 {
+		tail = strings.TrimLeft(tail, " \t")
 	}
+	b.WriteString(tail)
+	body := strings.ReplaceAll(b.String(), " \n", "\n")
+	if len(refs) == 0 {
+		return body
+	}
+	b.Reset()
+	b.WriteString(strings.TrimRight(body, " "))
 	b.WriteString("\n\n参考来源：")
 	for i, ref := range refs {
 		b.WriteString("\n" + strconv.Itoa(i+1) + ". " + imCitationListEntry(ref))
