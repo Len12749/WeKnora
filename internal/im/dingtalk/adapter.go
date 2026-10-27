@@ -717,6 +717,9 @@ func (a *Adapter) createAndDeliverCard(ctx context.Context, incoming *im.Incomin
 		"cardData": map[string]interface{}{
 			"cardParamMap": map[string]string{
 				"content": "",
+				// 宽屏布局：钉钉按 config.autoLayout 决定卡片宽度，
+				// 模板里声明了 config 变量才会生效，没声明会被忽略
+				"config": `{"autoLayout":true}`,
 			},
 		},
 		"userIdType": 1,
