@@ -11,20 +11,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStripIMCitationTags(t *testing.T) {
+func TestRenderIMCitations(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
 		want string
 	}{
 		{"no tags", "hello world", "hello world"},
-		{"kb tag", `text <kb id="1" title="doc"/> more`, "text  more"},
-		{"web tag", `see <web url="http://x.com"/> here`, "see  here"},
-		{"multiple", `<kb id="1"/><web url="x"/>text`, "text"},
+		{
+			"kb tag becomes numbered marker",
+			`text <kb doc="平台与角色.md" chunk_id="c1"/> more`,
+			"text [1] more\n\n参考来源：\n1. 平台与角色.md",
+		},
+		{
+			"web tag becomes markdown link in source list",
+			`see <web url="https://x.com/a" title="页面"/> here`,
+			"see [1] here\n\n参考来源：\n1. [页面](https://x.com/a)",
+		},
+		{
+			"web tag without title keeps url",
+			`see <web url="https://x.com/a"/> here`,
+			"see [1] here\n\n参考来源：\n1. https://x.com/a",
+		},
+		{"unknown tag disappears", `text <kb id="1"/> more`, "text  more"},
+		{
+			"adjacent citations of one document share a marker",
+			`<kb doc="a.md" chunk_id="1"/><kb doc="a.md" chunk_id="2"/>结论`,
+			"[1]结论\n\n参考来源：\n1. a.md",
+		},
+		{
+			"sources are numbered by first appearance",
+			`<kb doc="a.md" chunk_id="1"/>甲<web url="https://x.com/b" title="B"/>乙`,
+			"[1]甲[2]乙\n\n参考来源：\n1. a.md\n2. [B](https://x.com/b)",
+		},
+		{
+			"repeated citation across text keeps both markers",
+			`<kb doc="a.md" chunk_id="1"/>甲<kb doc="a.md" chunk_id="2"/>`,
+			"[1]甲[1]\n\n参考来源：\n1. a.md",
+		},
+		{"escaped attribute is unescaped", `<kb doc="A &amp; B.md" chunk_id="1"/>`, "[1]\n\n参考来源：\n1. A & B.md"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, stripIMCitationTags(tt.in))
+			assert.Equal(t, tt.want, renderIMCitations(tt.in))
 		})
 	}
 }

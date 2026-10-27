@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,13 +71,81 @@ const (
 )
 
 // imCitationTagRe matches inline citation tags produced by the agent pipeline.
-// These tags are rendered as interactive UI in the web frontend but are meaningless
-// in IM platforms, so they must be stripped before sending.
+// The web frontend renders them as interactive chips; IM has no such surface,
+// so they become [n] markers plus a trailing source list.
 var imCitationTagRe = regexp.MustCompile(`<(?:kb|web)\b[^>]*/?>`)
 
-// stripIMCitationTags removes <kb .../> and <web .../> inline citation tags from s.
-func stripIMCitationTags(s string) string {
-	return imCitationTagRe.ReplaceAllString(s, "")
+// imCitationAttrRe extracts name="value" pairs from a citation tag.
+var imCitationAttrRe = regexp.MustCompile(`([\w-]+)="([^"]*)"`)
+
+// imCitationLabel returns the label shown in the source list: the document
+// title for knowledge chunks, a markdown link for web pages. Malformed tags
+// yield "" and leave no marker behind.
+func imCitationLabel(tag string) string {
+	attrs := make(map[string]string, 4)
+	for _, m := range imCitationAttrRe.FindAllStringSubmatch(tag, -1) {
+		attrs[m[1]] = html.UnescapeString(m[2])
+	}
+	if strings.HasPrefix(tag, "<kb") {
+		return strings.TrimSpace(attrs["doc"])
+	}
+	title, url := strings.TrimSpace(attrs["title"]), attrs["url"]
+	switch {
+	case url == "":
+		return ""
+	case title == "":
+		return url
+	}
+	return "[" + title + "](" + url + ")"
+}
+
+// renderIMCitations rewrites <kb .../> and <web .../> citation tags into [n]
+// markers and appends a 参考来源 list, so an IM answer keeps its provenance.
+// Sources are numbered by first appearance; repeated citations share a number
+// and adjacent repeats collapse to one marker.
+func renderIMCitations(s string) string {
+	if !strings.Contains(s, "<kb") && !strings.Contains(s, "<web") {
+		return s
+	}
+	locs := imCitationTagRe.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	labels := make([]string, 0, len(locs))
+	numbers := make(map[string]int, len(locs))
+	last, prevNum := 0, 0
+	for _, loc := range locs {
+		gap, label := s[last:loc[0]], imCitationLabel(s[loc[0]:loc[1]])
+		last = loc[1]
+		if label == "" {
+			b.WriteString(gap)
+			prevNum = 0
+			continue
+		}
+		num, seen := numbers[label]
+		if !seen {
+			labels = append(labels, label)
+			num = len(labels)
+			numbers[label] = num
+		}
+		// 同一来源的连续引用只标一次，模型常一次引用多个 chunk
+		if num == prevNum && strings.TrimSpace(gap) == "" {
+			continue
+		}
+		b.WriteString(gap)
+		b.WriteString("[" + strconv.Itoa(num) + "]")
+		prevNum = num
+	}
+	b.WriteString(s[last:])
+	if len(labels) == 0 {
+		return b.String()
+	}
+	b.WriteString("\n\n参考来源：")
+	for i, label := range labels {
+		b.WriteString("\n" + strconv.Itoa(i+1) + ". " + label)
+	}
+	return b.String()
 }
 
 // imageXMLBlockRe matches <image ...>...</image> blocks produced by
@@ -183,11 +253,11 @@ func imQAFailureReply(err error) string {
 
 // cleanIMContent applies all IM-specific content transformations:
 //  1. Collapse <image> XML blocks back to plain markdown
-//  2. Strip <kb/> and <web/> citation tags
+//  2. Render <kb/> and <web/> citation tags as [n] markers with a source list
 //  3. Rewrite provider:// URLs to HTTP URLs (scheme-aware per tenant config)
 func cleanIMContent(ctx context.Context, content string, tenant *types.Tenant, defaultFileSvc interfaces.FileService, storageResolvers ...interfaces.StorageBackendResolver) string {
 	content = stripImageXMLTags(content)
-	content = stripIMCitationTags(content)
+	content = renderIMCitations(content)
 	resolver := newIMFileServiceResolver(tenant, defaultFileSvc, storageResolvers...).WithContext(ctx)
 	content = rewriteStorageURLs(ctx, content, resolver)
 	return content
