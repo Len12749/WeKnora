@@ -776,6 +776,7 @@ type streamState struct {
 	content        strings.Builder
 	sessionWebhook string
 	outTrackID     string    // non-empty when using AI card streaming
+	finalized      bool      // 完整内容已提交，EndStream 不再重复推送
 	lastUpdate     time.Time // for card update throttling
 	createdAt      time.Time // for orphan stream detection
 }
@@ -866,23 +867,9 @@ func (a *Adapter) UpdateStreamContent(ctx context.Context, incoming *im.Incoming
 	state.content.Reset()
 	state.content.WriteString(fullContent)
 
-	if state.outTrackID == "" {
-		state.mu.Unlock()
-		return nil
-	}
-
-	if time.Since(state.lastUpdate) < minCardUpdateInterval {
-		state.mu.Unlock()
-		return nil
-	}
-
-	state.lastUpdate = time.Now()
-	outTrackID := state.outTrackID
+	// 卡片模式不在生成过程中推送：钉钉客户端会逐字追帧，长回答要吐很久。
+	// 中间结果只留在本地，等 FinalizeStream 一次性提交完整内容。
 	state.mu.Unlock()
-
-	if err := a.streamingUpdateCard(ctx, outTrackID, fullContent, false); err != nil {
-		logger.Warnf(ctx, "[DingTalk] Failed to update card stream: %v", err)
-	}
 	return nil
 }
 
@@ -901,9 +888,14 @@ func (a *Adapter) FinalizeStream(ctx context.Context, incoming *im.IncomingMessa
 	state.mu.Unlock()
 
 	if outTrackID != "" {
-		if err := a.streamingUpdateCard(ctx, outTrackID, finalContent, false); err != nil {
+		// 一次性提交完整内容并收尾：生成过程中不推送，避免客户端逐字追帧
+		if err := a.streamingUpdateCard(ctx, outTrackID, finalContent, true); err != nil {
 			logger.Warnf(ctx, "[DingTalk] Failed to finalize card stream: %v", err)
+			return nil
 		}
+		state.mu.Lock()
+		state.finalized = true
+		state.mu.Unlock()
 	}
 	return nil
 }
@@ -925,12 +917,15 @@ func (a *Adapter) EndStream(ctx context.Context, incoming *im.IncomingMessage, s
 	state.mu.Lock()
 	fullContent := state.content.String()
 	outTrackID := state.outTrackID
+	finalized := state.finalized
 	sessionWebhook := state.sessionWebhook
 	state.mu.Unlock()
 
 	if outTrackID != "" {
-		if err := a.streamingUpdateCard(ctx, outTrackID, fullContent, true); err != nil {
-			logger.Warnf(ctx, "[DingTalk] Failed to finalize card stream: %v", err)
+		if !finalized {
+			if err := a.streamingUpdateCard(ctx, outTrackID, fullContent, true); err != nil {
+				logger.Warnf(ctx, "[DingTalk] Failed to finalize card stream: %v", err)
+			}
 		}
 	} else if sessionWebhook != "" {
 		if err := a.replyViaSessionWebhook(ctx, sessionWebhook, fullContent); err != nil {
