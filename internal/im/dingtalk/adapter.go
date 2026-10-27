@@ -885,19 +885,79 @@ func (a *Adapter) FinalizeStream(ctx context.Context, incoming *im.IncomingMessa
 	state.content.Reset()
 	state.content.WriteString(finalContent)
 	outTrackID := state.outTrackID
+	sessionWebhook := state.sessionWebhook
 	state.mu.Unlock()
 
-	if outTrackID != "" {
-		// 一次性提交完整内容并收尾：生成过程中不推送，避免客户端逐字追帧
-		if err := a.streamingUpdateCard(ctx, outTrackID, finalContent, true); err != nil {
-			logger.Warnf(ctx, "[DingTalk] Failed to finalize card stream: %v", err)
-			return nil
-		}
+	if outTrackID == "" {
+		return nil
+	}
+
+	// 一次性提交完整内容并收尾：生成过程中不推送，避免客户端逐字追帧。
+	// 卡片接口对超长或复杂正文偶尔返回 500，重试一次仍失败就退回普通消息，
+	// 保证用户一定能看到回答。
+	err := a.streamingUpdateCard(ctx, outTrackID, finalContent, true)
+	if err != nil {
+		logger.Warnf(ctx, "[DingTalk] Card finalize failed (bytes=%d), retrying: %v", len(finalContent), err)
+		time.Sleep(300 * time.Millisecond)
+		err = a.streamingUpdateCard(ctx, outTrackID, finalContent, true)
+	}
+	if err != nil {
+		logger.Warnf(ctx, "[DingTalk] Card finalize failed twice (bytes=%d), falling back to markdown: %v", len(finalContent), err)
 		state.mu.Lock()
 		state.finalized = true
 		state.mu.Unlock()
+		_ = a.streamingUpdateCard(ctx, outTrackID, "回答较长，完整内容见下一条消息。", true)
+		if sessionWebhook != "" {
+			a.sendWebhookMarkdown(ctx, sessionWebhook, finalContent)
+		}
+		return nil
 	}
+
+	state.mu.Lock()
+	state.finalized = true
+	state.mu.Unlock()
 	return nil
+}
+
+// webhookMarkdownChunk is the safe per-message size for DingTalk markdown
+// messages (the API rejects oversized payloads).
+const webhookMarkdownChunk = 3000
+
+// sendWebhookMarkdown posts content through the session webhook, splitting long
+// answers on line boundaries so nothing is silently dropped.
+func (a *Adapter) sendWebhookMarkdown(ctx context.Context, webhookURL, content string) {
+	for _, part := range splitMarkdownChunks(content, webhookMarkdownChunk) {
+		if err := a.replyViaSessionWebhook(ctx, webhookURL, part); err != nil {
+			logger.Warnf(ctx, "[DingTalk] Webhook markdown fallback failed: %v", err)
+			return
+		}
+	}
+}
+
+// splitMarkdownChunks cuts s into pieces of at most max runes, preferring the
+// last newline inside each window.
+func splitMarkdownChunks(s string, max int) []string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return []string{s}
+	}
+	var out []string
+	for len(runes) > 0 {
+		if len(runes) <= max {
+			out = append(out, string(runes))
+			break
+		}
+		cut := max
+		for i := max; i > max/2; i-- {
+			if runes[i] == '\n' {
+				cut = i + 1
+				break
+			}
+		}
+		out = append(out, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	return out
 }
 
 func (a *Adapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
