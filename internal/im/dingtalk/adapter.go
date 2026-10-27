@@ -716,9 +716,9 @@ func (a *Adapter) createAndDeliverCard(ctx context.Context, incoming *im.Incomin
 		"callbackType":   "STREAM",
 		"cardData": map[string]interface{}{
 			"cardParamMap": map[string]string{
-				// 首帧就带上占位正文，避免客户端先渲染一块空白卡片
-				"content":    "处理中…",
-				"flowStatus": "3",
+				"content": "",
+				// flowStatus=1 让模板显示“处理中”态，出结果后再改成 3
+				"flowStatus": "1",
 				// 宽屏布局：钉钉按 config.autoLayout 决定卡片宽度，
 				// 模板里声明了 config 变量才会生效，没声明会被忽略
 				"config": `{"autoLayout":true}`,
