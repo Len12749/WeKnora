@@ -58,6 +58,27 @@ func TestRenderIMCitations(t *testing.T) {
 	}
 }
 
+func TestRenderIMCitationsWithLinks(t *testing.T) {
+	in := `结论<kb doc="平台与角色.md" chunk_id="c1" url="https://alidocs.dingtalk.com/i/nodes/X"/>`
+	want := "结论[1]\n\n参考来源：\n1. [平台与角色.md](https://alidocs.dingtalk.com/i/nodes/X)"
+	assert.Equal(t, want, renderIMCitations(in))
+}
+
+func TestAttachCitationURLs(t *testing.T) {
+	var calls int
+	resolve := func(_ context.Context, ids []string) map[string]string {
+		calls++
+		assert.Equal(t, []string{"c1", "c2"}, ids, "同一 chunk 只查一次，按首次出现顺序")
+		return map[string]string{"c1": "https://alidocs.dingtalk.com/i/nodes/X"}
+	}
+	in := `<kb doc="a.md" chunk_id="c1" /><kb doc="a.md" chunk_id="c1" /><kb doc="b.md" chunk_id="c2" />`
+	out := attachCitationURLs(context.Background(), in, resolve)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, 2, strings.Count(out, `url="https://alidocs.dingtalk.com/i/nodes/X"`), "命中的 chunk 都补上链接")
+	assert.NotContains(t, out, `chunk_id="c2" url=`, "没有链接的文档不注入")
+	assert.Equal(t, in, attachCitationURLs(context.Background(), in, nil), "nil resolver 时原样返回")
+}
+
 func TestStripImageXMLTags(t *testing.T) {
 	tests := []struct {
 		name string
@@ -402,7 +423,7 @@ func TestCleanIMContent_AfterStreamReassembly(t *testing.T) {
 	sent, rem := simulateIMStreamFlush(parts)
 	require.Empty(t, rem)
 	joined := strings.Join(sent, "")
-	out := cleanIMContent(context.Background(), joined, tenant, nil)
+	out := cleanIMContent(context.Background(), joined, tenant, nil, nil)
 	assert.Contains(t, out, "/api/v1/files/presigned")
 	assert.NotContains(t, out, "local://10000")
 }

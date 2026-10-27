@@ -163,6 +163,6 @@ func TestCleanIMContent_MinIOFallbackIntegration(t *testing.T) {
 		StorageEngineConfig: &types.StorageEngineConfig{DefaultProvider: "cos"},
 	}
 	in := "see ![x](minio://wizard-test/10000/exports/x.png) ok"
-	out := cleanIMContent(context.Background(), in, tenant, stub)
+	out := cleanIMContent(context.Background(), in, tenant, stub, nil)
 	assert.Contains(t, out, "https://minio.example/img.png")
 }

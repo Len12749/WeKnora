@@ -70,33 +70,110 @@ const (
 	agentCompleteWaitTimeout = 10 * time.Second
 )
 
-// imCitationTagRe matches inline citation tags produced by the agent pipeline.
-// The web frontend renders them as interactive chips; IM has no such surface,
-// so they become [n] markers plus a trailing source list.
-var imCitationTagRe = regexp.MustCompile(`<(?:kb|web)\b[^>]*/?>`)
+// citationLinkResolver resolves chunk ids to the original document URL (for
+// imported docs, the DingTalk doc they came from). nil means the channel cannot
+// render links and labels stay plain text.
+type citationLinkResolver func(ctx context.Context, chunkIDs []string) map[string]string
 
-// imCitationAttrRe extracts name="value" pairs from a citation tag.
-var imCitationAttrRe = regexp.MustCompile(`([\w-]+)="([^"]*)"`)
+var (
+	// imCitationTagRe matches inline citation tags produced by the agent pipeline.
+	// The web frontend renders them as interactive chips; IM has no such surface,
+	// so they become [n] markers plus a trailing source list.
+	imCitationTagRe = regexp.MustCompile(`<(?:kb|web)\b[^>]*/?>`)
+	// imKBTagRe matches only <kb/> tags; used to inject original links.
+	imKBTagRe = regexp.MustCompile(`(?s)<kb\b[^>]*>`)
+	// imChunkIDAttrRe extracts chunk_id="…" from a <kb/> tag; the chunk row
+	// points at its knowledge row, which carries the original document link.
+	imChunkIDAttrRe = regexp.MustCompile(`\bchunk_id="([^"]*)"`)
+	// imCitationAttrRe extracts name="value" pairs from a citation tag.
+	imCitationAttrRe = regexp.MustCompile(`([\w-]+)="([^"]*)"`)
+)
 
-// imCitationLabel returns the label shown in the source list: the document
-// title for knowledge chunks, a markdown link for web pages. Malformed tags
-// yield "" and leave no marker behind.
-func imCitationLabel(tag string) string {
-	attrs := make(map[string]string, 4)
+// attachCitationURLs injects url="…" into <kb/> tags, so a channel that renders
+// markdown can link back to the original document. Missing resolver, ids or
+// hits all leave the content untouched.
+func attachCitationURLs(ctx context.Context, content string, resolve citationLinkResolver) string {
+	if resolve == nil || !strings.Contains(content, "chunk_id=") {
+		return content
+	}
+	ids := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	for _, tag := range imKBTagRe.FindAllString(content, -1) {
+		m := imChunkIDAttrRe.FindStringSubmatch(tag)
+		if len(m) != 2 || m[1] == "" {
+			continue
+		}
+		if _, dup := seen[m[1]]; dup {
+			continue
+		}
+		seen[m[1]] = struct{}{}
+		ids = append(ids, m[1])
+	}
+	if len(ids) == 0 {
+		return content
+	}
+	urls := resolve(ctx, ids)
+	if len(urls) == 0 {
+		return content
+	}
+	return imKBTagRe.ReplaceAllStringFunc(content, func(tag string) string {
+		m := imChunkIDAttrRe.FindStringSubmatch(tag)
+		if len(m) != 2 || strings.Contains(tag, ` url="`) {
+			return tag
+		}
+		url := strings.TrimSpace(urls[m[1]])
+		if url == "" {
+			return tag
+		}
+		end := strings.LastIndex(tag, "/>")
+		if end < 0 {
+			return tag
+		}
+		return strings.TrimRight(tag[:end], " ") + ` url="` + html.EscapeString(url) + `" />`
+	})
+}
+
+// imCitationRef is one citation as it appears in a chat message.
+type imCitationRef struct {
+	label string // 列表里显示的文档名
+	link  string // 原文链接；空表示该渠道只显示纯文字
+}
+
+// imCitationRefOf parses one citation tag. Knowledge chunks use the document
+// title plus the url attribute injected by attachCitationURLs; web pages are
+// always links. Malformed tags yield a zero ref and leave no marker behind.
+func imCitationRefOf(tag string) imCitationRef {
+	attrs := make(map[string]string, 5)
 	for _, m := range imCitationAttrRe.FindAllStringSubmatch(tag, -1) {
 		attrs[m[1]] = html.UnescapeString(m[2])
 	}
 	if strings.HasPrefix(tag, "<kb") {
-		return strings.TrimSpace(attrs["doc"])
+		return imCitationRef{label: strings.TrimSpace(attrs["doc"]), link: strings.TrimSpace(attrs["url"])}
 	}
-	title, url := strings.TrimSpace(attrs["title"]), attrs["url"]
-	switch {
-	case url == "":
-		return ""
-	case title == "":
-		return url
+	url := attrs["url"]
+	if url == "" {
+		return imCitationRef{}
 	}
-	return "[" + title + "](" + url + ")"
+	title := strings.TrimSpace(attrs["title"])
+	if title == "" {
+		// 没有标题时直接把 URL 当名字，再加链接会变成 [url](url)
+		return imCitationRef{label: url}
+	}
+	return imCitationRef{label: title, link: url}
+}
+
+// imCitationMarker renders the inline [n] marker. It stays plain text so the
+// answer body reads the same on every channel; links live in the source list.
+func imCitationMarker(num int) string {
+	return "[" + strconv.Itoa(num) + "]"
+}
+
+// imCitationListEntry renders one 参考来源 line.
+func imCitationListEntry(ref imCitationRef) string {
+	if ref.link == "" {
+		return ref.label
+	}
+	return "[" + ref.label + "](" + ref.link + ")"
 }
 
 // renderIMCitations rewrites <kb .../> and <web .../> citation tags into [n]
@@ -112,38 +189,42 @@ func renderIMCitations(s string) string {
 		return s
 	}
 	var b strings.Builder
-	labels := make([]string, 0, len(locs))
+	refs := make([]imCitationRef, 0, len(locs))
 	numbers := make(map[string]int, len(locs))
 	last, prevNum := 0, 0
 	for _, loc := range locs {
-		gap, label := s[last:loc[0]], imCitationLabel(s[loc[0]:loc[1]])
+		gap, ref := s[last:loc[0]], imCitationRefOf(s[loc[0]:loc[1]])
 		last = loc[1]
-		if label == "" {
+		if ref.label == "" {
 			b.WriteString(gap)
 			prevNum = 0
 			continue
 		}
-		num, seen := numbers[label]
+		key := ref.link
+		if key == "" {
+			key = ref.label
+		}
+		num, seen := numbers[key]
 		if !seen {
-			labels = append(labels, label)
-			num = len(labels)
-			numbers[label] = num
+			refs = append(refs, ref)
+			num = len(refs)
+			numbers[key] = num
 		}
 		// 同一来源的连续引用只标一次，模型常一次引用多个 chunk
 		if num == prevNum && strings.TrimSpace(gap) == "" {
 			continue
 		}
 		b.WriteString(gap)
-		b.WriteString("[" + strconv.Itoa(num) + "]")
+		b.WriteString(imCitationMarker(num))
 		prevNum = num
 	}
 	b.WriteString(s[last:])
-	if len(labels) == 0 {
+	if len(refs) == 0 {
 		return b.String()
 	}
 	b.WriteString("\n\n参考来源：")
-	for i, label := range labels {
-		b.WriteString("\n" + strconv.Itoa(i+1) + ". " + label)
+	for i, ref := range refs {
+		b.WriteString("\n" + strconv.Itoa(i+1) + ". " + imCitationListEntry(ref))
 	}
 	return b.String()
 }
@@ -211,8 +292,8 @@ func holdbackCutoff(chunk string) int {
 }
 
 // formatIMOutboundAnswer strips thinking/tool blocks and applies IM content cleanup.
-func formatIMOutboundAnswer(ctx context.Context, raw string, tenant *types.Tenant, defaultFileSvc interfaces.FileService, storageResolvers ...interfaces.StorageBackendResolver) string {
-	return cleanIMContent(ctx, FormatIMDisplayContent(raw, StreamDisplayFinal), tenant, defaultFileSvc, storageResolvers...)
+func formatIMOutboundAnswer(ctx context.Context, raw string, tenant *types.Tenant, defaultFileSvc interfaces.FileService, resolve citationLinkResolver, storageResolvers ...interfaces.StorageBackendResolver) string {
+	return cleanIMContent(ctx, FormatIMDisplayContent(raw, StreamDisplayFinal), tenant, defaultFileSvc, resolve, storageResolvers...)
 }
 
 // formatIMOutboundAnswerOrFallback guarantees that cleanup cannot turn a
@@ -224,9 +305,10 @@ func formatIMOutboundAnswerOrFallback(
 	raw string,
 	tenant *types.Tenant,
 	defaultFileSvc interfaces.FileService,
+	resolve citationLinkResolver,
 	storageResolvers ...interfaces.StorageBackendResolver,
 ) string {
-	content := formatIMOutboundAnswer(ctx, raw, tenant, defaultFileSvc, storageResolvers...)
+	content := formatIMOutboundAnswer(ctx, raw, tenant, defaultFileSvc, resolve, storageResolvers...)
 	if strings.TrimSpace(content) == "" {
 		return imNoAnswerFallback
 	}
@@ -254,13 +336,60 @@ func imQAFailureReply(err error) string {
 // cleanIMContent applies all IM-specific content transformations:
 //  1. Collapse <image> XML blocks back to plain markdown
 //  2. Render <kb/> and <web/> citation tags as [n] markers with a source list
+//     (linked to the original document when resolve is non-nil)
 //  3. Rewrite provider:// URLs to HTTP URLs (scheme-aware per tenant config)
-func cleanIMContent(ctx context.Context, content string, tenant *types.Tenant, defaultFileSvc interfaces.FileService, storageResolvers ...interfaces.StorageBackendResolver) string {
+func cleanIMContent(ctx context.Context, content string, tenant *types.Tenant, defaultFileSvc interfaces.FileService, resolve citationLinkResolver, storageResolvers ...interfaces.StorageBackendResolver) string {
 	content = stripImageXMLTags(content)
+	content = attachCitationURLs(ctx, content, resolve)
 	content = renderIMCitations(content)
 	resolver := newIMFileServiceResolver(tenant, defaultFileSvc, storageResolvers...).WithContext(ctx)
 	content = rewriteStorageURLs(ctx, content, resolver)
 	return content
+}
+
+// citationLinkResolverFor returns a link resolver only for channels whose
+// messages render markdown links (currently DingTalk: webhook markdown and AI
+// card markdown). Other channels keep the plain-text 参考来源 list.
+func (s *Service) citationLinkResolverFor(platform Platform) citationLinkResolver {
+	if s == nil || s.db == nil || platform != PlatformDingtalk {
+		return nil
+	}
+	return s.lookupCitationSourceURLs
+}
+
+// lookupCitationSourceURLs maps chunk ids to their document's
+// custom_metadata.source_url. Best effort: a failure only degrades the source
+// list to plain titles.
+func (s *Service) lookupCitationSourceURLs(ctx context.Context, chunkIDs []string) map[string]string {
+	if s == nil || s.db == nil || len(chunkIDs) == 0 {
+		return nil
+	}
+	var rows []struct {
+		ChunkID        string
+		CustomMetadata types.JSON
+	}
+	if err := s.db.WithContext(ctx).
+		Table("chunks AS c").
+		Select("c.id AS chunk_id, k.custom_metadata AS custom_metadata").
+		Joins("JOIN knowledges k ON k.id = c.knowledge_id").
+		Where("c.id IN ?", chunkIDs).
+		Scan(&rows).Error; err != nil {
+		logger.Warnf(ctx, "[IM] Citation source URL lookup failed: %v", err)
+		return nil
+	}
+	urls := make(map[string]string, len(rows))
+	for _, row := range rows {
+		var meta struct {
+			SourceURL string `json:"source_url"`
+		}
+		if len(row.CustomMetadata) == 0 || json.Unmarshal(row.CustomMetadata, &meta) != nil {
+			continue
+		}
+		if url := strings.TrimSpace(meta.SourceURL); url != "" {
+			urls[row.ChunkID] = url
+		}
+	}
+	return urls
 }
 
 // newIMFileServiceResolver builds a per-message storage backend resolver. The
@@ -2075,7 +2204,7 @@ func (s *Service) executeQARequest(req *qaRequest) {
 
 	outCtx := imOutboundContext(ctx)
 	reply := &ReplyMessage{
-		Content: formatIMOutboundAnswerOrFallback(outCtx, answer, req.tenant, s.defaultFileSvc, s.storageResolver),
+		Content: formatIMOutboundAnswerOrFallback(outCtx, answer, req.tenant, s.defaultFileSvc, s.citationLinkResolverFor(req.msg.Platform), s.storageResolver),
 		IsFinal: true,
 	}
 	if err := req.adapter.SendReply(outCtx, req.msg, reply); err != nil {
@@ -2123,7 +2252,7 @@ func (s *Service) handleMessageFullOutput(
 	// QA (and /stop) may have cancelled ctx. Platform updates must still run so
 	// the thinking card is replaced instead of hanging forever.
 	outCtx := imOutboundContext(ctx)
-	finalContent := formatIMOutboundAnswerOrFallback(outCtx, answer, tenant, s.defaultFileSvc, s.storageResolver)
+	finalContent := formatIMOutboundAnswerOrFallback(outCtx, answer, tenant, s.defaultFileSvc, s.citationLinkResolverFor(msg.Platform), s.storageResolver)
 
 	finalizeErr := streamer.FinalizeStream(outCtx, msg, streamID, finalContent)
 	if finalizeErr != nil {
@@ -2915,7 +3044,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 			displaySource = displaySource[:cut]
 		}
 
-		display := cleanIMContent(ctx, displaySource, tenant, s.defaultFileSvc, s.storageResolver)
+		display := cleanIMContent(ctx, displaySource, tenant, s.defaultFileSvc, s.citationLinkResolverFor(msg.Platform), s.storageResolver)
 		if err := streamer.UpdateStreamContent(ctx, msg, streamID, display); err != nil {
 			logger.Warnf(ctx, "[IM] UpdateStreamContent failed: %v", err)
 		}
@@ -2955,7 +3084,7 @@ loop:
 	bufMu.Unlock()
 
 	outCtx := imOutboundContext(ctx)
-	finalDisplay := cleanIMContent(outCtx, FormatIMFinalFromParts(parts), tenant, s.defaultFileSvc, s.storageResolver)
+	finalDisplay := cleanIMContent(outCtx, FormatIMFinalFromParts(parts), tenant, s.defaultFileSvc, s.citationLinkResolverFor(msg.Platform), s.storageResolver)
 	if noVisibleContent || finalDisplay == "" {
 		fallback := imNoAnswerFallback
 		if finalErr != nil {
@@ -3019,7 +3148,7 @@ func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, s
 
 	outCtx := imOutboundContext(ctx)
 	return adapter.SendReply(outCtx, msg, &ReplyMessage{
-		Content: formatIMOutboundAnswerOrFallback(outCtx, answer, tenant, s.defaultFileSvc, s.storageResolver),
+		Content: formatIMOutboundAnswerOrFallback(outCtx, answer, tenant, s.defaultFileSvc, s.citationLinkResolverFor(msg.Platform), s.storageResolver),
 		IsFinal: true,
 	})
 }
