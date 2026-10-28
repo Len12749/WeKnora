@@ -368,13 +368,19 @@ func cleanIMContent(ctx context.Context, content string, tenant *types.Tenant, d
 }
 
 // citationLinkResolverFor returns a link resolver only for channels whose
-// messages render markdown links (currently DingTalk: webhook markdown and AI
-// card markdown). Other channels keep the plain-text 参考来源 list.
+// messages render markdown links: DingTalk (webhook markdown and AI card
+// markdown) and Feishu (CardKit streaming card with a markdown element).
+// Other channels keep the plain-text 参考来源 list.
 func (s *Service) citationLinkResolverFor(platform Platform) citationLinkResolver {
-	if s == nil || s.db == nil || platform != PlatformDingtalk {
+	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.lookupCitationSourceURLs
+	switch platform {
+	case PlatformDingtalk, PlatformFeishu:
+		return s.lookupCitationSourceURLs
+	default:
+		return nil
+	}
 }
 
 // lookupCitationSourceURLs maps chunk ids to their document's

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/types"
+	"gorm.io/gorm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -465,4 +466,13 @@ func TestRewriteStorageURLs_MultipleImagesInOneChunk(t *testing.T) {
 	out := rewriteStorageURLs(context.Background(), doc, newIMFileServiceResolver(tenant, nil))
 	assert.NotContains(t, out, "local://")
 	assert.Equal(t, 3, strings.Count(out, "/api/v1/files/presigned"))
+}
+
+func TestCitationLinkResolverPlatforms(t *testing.T) {
+	svc := &Service{db: &gorm.DB{}}
+	assert.NotNil(t, svc.citationLinkResolverFor(PlatformDingtalk), "钉钉渲染 markdown 链接")
+	assert.NotNil(t, svc.citationLinkResolverFor(PlatformFeishu), "飞书卡片 markdown 同样支持链接")
+	assert.Nil(t, svc.citationLinkResolverFor(PlatformWeCom), "其余渠道保持纯文字来源列表")
+	assert.Nil(t, (*Service)(nil).citationLinkResolverFor(PlatformFeishu), "nil service 不应 panic")
+	assert.Nil(t, (&Service{}).citationLinkResolverFor(PlatformFeishu), "无 db 时降级为纯文字")
 }
