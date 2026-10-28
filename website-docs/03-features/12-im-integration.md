@@ -37,10 +37,9 @@ IM 集成将智能体接入企业微信、飞书、钉钉、Slack、Telegram 等
 | 命令 | 实现文件 | 功能 | 副作用 |
 | --- | --- | --- | --- |
 | `/help [命令名]` | `cmd_help.go` | 列出全部可用指令，或查看某条指令的详细用法 | 无 |
-| `/info` | `cmd_info.go` | 展示当前绑定 Agent 的信息与能力：Agent/RAG 模式、启用的知识库清单（`KBSelectionMode` all/selected/none）、Skills、MCP 服务、联网搜索开关、输出模式 | 无 |
-| `/search <关键词>` | `cmd_search.go` | 直接对 Agent 可达的知识库做混合检索（向量+关键词），返回原文片段（**不经 AI 总结**）；最多显示 5 条、每条 200 rune，附匹配度百分比。知识库范围与 QA 流水线的 `resolveKnowledgeBasesFromAgent` 一致（含 Agent 模式能力过滤） | 无 |
-| `/stop` | `cmd_stop.go` | 中止当前正在进行的回答（可打断长 ReAct 推理链） | `ActionStop`：先移出队列或取消本机 in-flight；再向 StreamManager 写 stop 事件（与 Web 端 StopSession 同机制，支持**跨实例**停止——通过 `im:inflight:` 映射查到 sessionID/messageID）；最后写 Redis `im:stop:` 标记兜底"已排队未执行"的请求 |
 | `/clear` | `cmd_clear.go` | 清空对话记忆 | `ActionClear`：软删当前 `ChannelSession`，下一条消息创建全新 WeKnora 会话 |
+
+> 本分支只注册 `/help` 与 `/clear`。上游版本另有 `/info`、`/search`、`/stop` 三条指令，本分支已移除对应实现；未注册的斜杠词按"未知指令"提示处理。
 
 ## 群聊与私聊行为
 
@@ -150,8 +149,8 @@ credentials.api_base_url 可覆盖 API origin，并同时用作长连接 SDK 的
 | --- | --- |
 | `im:ws:leader:<channelID>` | WebSocket/长轮询渠道 leader 选举（TTL 15s，5s 续期，10s 抢锁重试） |
 | `im:dedup:<messageID>` | 跨实例消息去重（TTL 5min） |
-| `im:stop:<userKey>` | 跨实例 /stop 预执行标记（TTL 30s） |
-| `im:inflight:<userKey>` | userKey → `sessionID:messageID` 映射，供跨实例 /stop 写 StreamManager 停止事件 |
+| `im:stop:<userKey>` | 跨实例停止预执行标记（TTL 30s）；本分支未注册 `/stop`，暂不会写入 |
+| `im:inflight:<userKey>` | userKey → `sessionID:messageID` 映射，供跨实例停止写 StreamManager 停止事件；同上，本分支暂不会写入 |
 | `im:queue:user:<userKey>` | 全局单用户排队计数 |
 | `im:ratelimit:<key>` | 滑动窗口限流（ZSET） |
 | `im:global:active` | 全局并发 QA worker 计数（Lua 原子 INCR+校验，TTL 5min 自愈） |
@@ -180,8 +179,8 @@ sequenceDiagram
     H->>S: 异步 HandleMessage(msg, channelID)
     S->>DB: 消息去重 (im:dedup:messageID, TTL 5min)
     S->>S: 超长截断 (4096 rune) / 速率限制 (滑动窗口 10次/60s, 命令豁免)
-    alt "斜杠命令 (/help /info /search /stop /clear)"
-        S->>S: CommandRegistry.Parse → cmd.Execute → 副作用 (ActionClear / ActionStop)
+    alt "斜杠命令 (/help /clear)"
+        S->>S: CommandRegistry.Parse → cmd.Execute → 副作用 (ActionClear)
         S->>A: SendReply / 流式回复命令结果
     else "普通消息（含文件/图片）"
         S->>DB: resolveSession — (platform,user,chat[,thread]) → ChannelSession → WeKnora Session
@@ -203,7 +202,7 @@ sequenceDiagram
 关键细节（均见 `service.go`）：
 
 - **去重**：`MessageID` 写入 Redis `im:dedup:`（TTL 5 分钟）或本地 `sync.Map`（单实例模式），IM 平台重推的回调直接跳过。
-- **限流**：按 `channelID:userID:chatID[:threadID]` 做滑动窗口限流（默认 60s 内 10 条，可经 `config.IM` 覆盖）；**斜杠命令绕过限流**，保证用户在风暴中仍能 `/stop`。
+- **限流**：按 `channelID:userID:chatID[:threadID]` 做滑动窗口限流（默认 60s 内 10 条，可经 `config.IM` 覆盖）；**斜杠命令绕过限流**，保证命令在消息风暴中仍能正常响应。
 - **QA 队列**（`qaqueue.go`）：有界队列 + 固定 worker 池（默认 workers=5、队列上限 50、单用户排队上限 3、排队超时 60s），多实例下通过 Redis 计数实现**全局单用户上限**（`im:queue:user:`）与可选的**全局并发闸门**（`im:global:active` + Lua 脚本，`GlobalMaxWorkers` 配置），对下游 LLM 形成背压。排队位置 > 0 时先回一条"排队中"提示。
 - **会话解析**：`user` 模式按用户维度共享会话，标题形如"张三 · 群聊 1a2b3c4d"；`thread` 模式每个顶层消息/话题一个会话（Slack thread、飞书话题群、Telegram Forum Topic、Mattermost root_id）。首条消息会异步生成会话标题（`GenerateTitleAsync`）。
 - **身份注入**（`withIMIdentity`）：IM 回调走平台签名而非 WeKnora 登录态，因此注入合成身份 `system-<tenantID>` + `PrincipalIMUser`（`tenantID:channelID:platform:userID`）+ Viewer 角色，使组织共享知识库等依赖 UserID 的逻辑正常工作；同时标记 `MCPOAuthNonInteractive`（见[MCP OAuth 授权通知](#mcp-oauth-授权通知-身份绑定)）。
