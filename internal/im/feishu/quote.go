@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/im"
@@ -35,16 +34,6 @@ type fetchedMessagesResponse struct {
 	Msg  string `json:"msg"`
 	Data struct {
 		Items []fetchedMessage `json:"items"`
-	} `json:"data"`
-}
-
-type contactUserResponse struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Data struct {
-		User struct {
-			Name string `json:"name"`
-		} `json:"user"`
 	} `json:"data"`
 }
 
@@ -157,59 +146,6 @@ func extractFeishuQuoteText(msg fetchedMessage) string {
 	return ""
 }
 
-// senderNameEntry 缓存 open_id → 名字，避免每条消息都打一次通讯录接口。
-type senderNameEntry struct {
-	name string
-	at   time.Time
-}
-
-var (
-	senderNameCache sync.Map // key: appID|openID
-	senderNameTTL   = 30 * time.Minute
-)
-
-// resolveSenderName 把飞书 open_id 解析成可读名字。
-//
-// 失败时返回空串（工单里就显示 open_id），不影响消息处理。常见的失败原因是
-// 应用没有开 contact:user.base:readonly 权限，日志里会看到 code=99991672。
-func (a *Adapter) resolveSenderName(ctx context.Context, openID string) string {
-	if openID == "" {
-		return ""
-	}
-	key := a.appID + "|" + openID
-	if cached, ok := senderNameCache.Load(key); ok {
-		entry := cached.(senderNameEntry)
-		if time.Since(entry.at) < senderNameTTL {
-			return entry.name
-		}
-	}
-
-	token, err := a.getTenantAccessToken(ctx)
-	if err != nil {
-		senderNameCache.Store(key, senderNameEntry{at: time.Now()})
-		return ""
-	}
-
-	var resp contactUserResponse
-	endpoint := a.api("/open-apis/contact/v3/users/%s?user_id_type=open_id", openID)
-	if err := a.feishuGet(ctx, token, endpoint, &resp); err != nil {
-		logger.Warnf(ctx, "[%s] resolve sender name failed: %v", a.region.Label, err)
-		senderNameCache.Store(key, senderNameEntry{at: time.Now()})
-		return ""
-	}
-	if resp.Code != 0 {
-		logger.Warnf(ctx,
-			"[%s] resolve sender name rejected: code=%d msg=%s（需要 contact:user.base:readonly 权限）",
-			a.region.Label, resp.Code, resp.Msg)
-		senderNameCache.Store(key, senderNameEntry{at: time.Now()})
-		return ""
-	}
-
-	name := strings.TrimSpace(resp.Data.User.Name)
-	senderNameCache.Store(key, senderNameEntry{name: name, at: time.Now()})
-	return name
-}
-
 func truncate(s string, limit int) string {
 	runes := []rune(s)
 	if len(runes) <= limit {
@@ -237,14 +173,6 @@ func (a *Adapter) enrichIncoming(
 	parentID := ""
 	if event.Event.Message.ParentId != nil {
 		parentID = *event.Event.Message.ParentId
-	}
-	openID := ""
-	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil && event.Event.Sender.SenderId.OpenId != nil {
-		openID = *event.Event.Sender.SenderId.OpenId
-	}
-
-	if msg.UserName == "" {
-		msg.UserName = a.resolveSenderName(ctx, openID)
 	}
 	if parentID != "" {
 		quote := a.fetchQuoteForReply(ctx, parentID)

@@ -271,11 +271,19 @@ const PLATFORM_LABELS: Record<string, string> = {
   qqbot: 'QQ',
 }
 
+// 飞书统一显示成「飞书用户·xxxx」：飞书不提供昵称，且未开通通讯录权限，
+// 不做"有名字就显示名字"的分支，避免同一个人一会儿有名字一会儿是短码。
 function submitterLabel(ticket: Ticket) {
-  if (ticket.submitter_name) return ticket.submitter_name
+  const platform = (ticket.platform || '').toLowerCase()
   const raw = (ticket.submitter_id || '').trim()
-  if (!raw) return '—'
-  const label = PLATFORM_LABELS[(ticket.platform || '').toLowerCase()] || 'IM'
+  const isFeishu = platform === 'feishu' || platform === 'lark'
+  if (!isFeishu && ticket.submitter_name) {
+    return ticket.submitter_name
+  }
+  if (!raw) {
+    return isFeishu ? '飞书用户' : '—'
+  }
+  const label = PLATFORM_LABELS[platform] || 'IM'
   const cleaned = raw
     .replace(/^ou_/, '')
     .replace(/^on_/, '')
