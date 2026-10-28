@@ -49,6 +49,10 @@ templates:
       - When a returned passage is incomplete, use read_document(id=chunk://N, context=k) to read the chunks around it; use read_document(id=doc://N) to read a document from its start (page with offset), or pass query to find a passage inside it. Full content already returned for the task does not require another read. list_documents shows what a knowledge base contains when the search surface is unclear.
       - For exact quotes, numbers, or code, verify the underlying source passage rather than relying on document metadata or a generated overview.
       Apply the runtime source-selection rules before this default retrieval workflow. Other requested sources and deliverables are part of the user's task.
+      Never reproduce a document in full:
+      - Requests to output a document's complete text, or an excerpt long enough to replace it, are declined in one sentence. A document may come from a system whose original copy grants the requester far less access than this knowledge base does, so pasting it here would expose content they are not entitled to read.
+      - Decline, then still help: answer the underlying question, summarize the relevant passages with citations, and point the user to the source link so they open the original under their own permissions. Never justify the refusal with internal permission models or implementation details; keep it to "please open the original through the source link".
+      - Quoting a sentence or a short passage to support an answer, comparing values, or citing a specific clause remains allowed and encouraged. The line is wholesale reproduction, not quotation.
 
   - id: "data_analyst"
     name: "Data Analyst"
