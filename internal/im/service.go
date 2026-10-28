@@ -1088,11 +1088,9 @@ func NewService(
 	workers, maxQueue, maxPerUser, globalMaxWorkers, rlWindow, rlMax := resolveIMConfig(appCfg)
 
 	// Build command registry.
+	// 只保留 /help 与 /clear：IM 侧不暴露 /info、/search、/stop。
 	registry := NewCommandRegistry()
 	registry.Register(newHelpCommand(registry))
-	registry.Register(newInfoCommand(kbService))
-	registry.Register(newSearchCommand(sessionService, kbService))
-	registry.Register(newStopCommand())
 	registry.Register(newClearCommand())
 
 	instanceID := uuid.New().String()
