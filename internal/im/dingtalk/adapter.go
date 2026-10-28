@@ -522,6 +522,7 @@ func (a *Adapter) SendReply(ctx context.Context, incoming *im.IncomingMessage, r
 }
 
 func (a *Adapter) replyViaSessionWebhook(ctx context.Context, webhookURL, content string) error {
+	content = hardenLineBreaks(content)
 	u, err := url.Parse(webhookURL)
 	if err != nil || u.Scheme != "https" || u.Host != "oapi.dingtalk.com" ||
 		u.User != nil || u.Path != "/robot/sendBySession" {
@@ -563,6 +564,7 @@ func (a *Adapter) replyViaSessionWebhook(ctx context.Context, webhookURL, conten
 }
 
 func (a *Adapter) replyViaOpenAPI(ctx context.Context, incoming *im.IncomingMessage, content string) error {
+	content = hardenLineBreaks(content)
 	token, err := a.getAccessToken(ctx)
 	if err != nil {
 		return fmt.Errorf("get access token: %w", err)
@@ -757,6 +759,7 @@ func (a *Adapter) createAndDeliverCard(ctx context.Context, incoming *im.Incomin
 
 // streamingUpdateCard pushes content to an existing AI card.
 func (a *Adapter) streamingUpdateCard(ctx context.Context, outTrackID, content string, isFinalize bool) error {
+	content = hardenLineBreaks(content)
 	body := map[string]interface{}{
 		"outTrackId": outTrackID,
 		"guid":       uuid.New().String(),
@@ -775,6 +778,9 @@ func (a *Adapter) streamingUpdateCard(ctx context.Context, outTrackID, content s
 // 非流式模板（MarkdownBlock.isStreaming=false）不走 /card/streaming，
 // 而是通过这里写入 content 与 flowStatus。
 func (a *Adapter) updateCardInstance(ctx context.Context, outTrackID string, params map[string]string) error {
+	if content, ok := params["content"]; ok {
+		params["content"] = hardenLineBreaks(content)
+	}
 	body := map[string]interface{}{
 		"outTrackId": outTrackID,
 		"cardData": map[string]interface{}{
