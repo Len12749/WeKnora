@@ -30,6 +30,7 @@ const (
 	WebSearchProviderTypeMetaso     WebSearchProviderType = "metaso"
 	WebSearchProviderTypeBocha      WebSearchProviderType = "bocha"
 	WebSearchProviderTypeSerply     WebSearchProviderType = "serply"
+	WebSearchProviderTypeDeepseek   WebSearchProviderType = "deepseek"
 )
 
 // WebSearchProviderEntity represents a configured web search provider instance for a workspace.
@@ -185,6 +186,11 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			ID: "serply", Name: "Serply", RequiresAPIKey: true, SupportsProxy: true,
 			Description: "Serply Google search API (supports country and freshness filters)",
 			DocsURL:     "https://serply.io/docs",
+		},
+		{
+			ID: "deepseek", Name: "DeepSeek Search", RequiresAPIKey: true, SupportsProxy: true,
+			Description: "DeepSeek 官方联网搜索 API（按成功请求次数计费）",
+			DocsURL:     "https://api-docs.deepseek.com/zh-cn/guides/search",
 		},
 		{
 			ID:             "duckduckgo",
