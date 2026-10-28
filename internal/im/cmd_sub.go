@@ -93,7 +93,9 @@ func (s *Service) resolveTicketTarget(
 	sessionID string,
 	quote *QuotedMessage,
 ) (string, string, error) {
-	if quote == nil || (quote.CreatedAt.IsZero() && strings.TrimSpace(quote.Content) == "") {
+	// 只有"引用机器人的回复"才用于定位那一轮；引用别人的消息、或压根没引用，
+	// 都按最近一轮提交，避免把别人的问答错配进来。
+	if quote == nil || !quote.IsBotMessage || (quote.CreatedAt.IsZero() && strings.TrimSpace(quote.Content) == "") {
 		return s.latestQAPair(ctx, sessionID)
 	}
 

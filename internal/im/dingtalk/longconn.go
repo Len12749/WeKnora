@@ -75,11 +75,11 @@ func (c *LongConnClient) onChatBotFrame(
 
 	incoming := streamToIncoming(&data, c.clientID)
 	logDingTalkSubDiagnostic(ctx, df.Data)
-	if quote := parseDingTalkQuote(df.Data); quote != nil {
+	if quote := parseDingTalkQuote(df.Data, data.ChatbotUserId); quote != nil {
 		incoming.Quote = quote
 		logger.Infof(ctx,
-			"[IM] DingTalk quoted reply detected: msg_id=%s content_len=%d created_at=%s",
-			quote.MessageID, len(quote.Content), formatQuoteTime(quote.CreatedAt))
+			"[IM] DingTalk quoted reply detected: msg_id=%s from_bot=%v content_len=%d created_at=%s",
+			quote.MessageID, quote.IsBotMessage, len(quote.Content), formatQuoteTime(quote.CreatedAt))
 	}
 
 	if err := c.handler(ctx, incoming); err != nil {
@@ -117,7 +117,7 @@ func logDingTalkSubDiagnostic(ctx context.Context, raw string) {
 
 // parseDingTalkQuote 提取引用回复的目标消息。钉钉把被引用消息放在
 // text.repliedMsg 里，SDK 未建模，只能按原始 JSON 读。
-func parseDingTalkQuote(raw string) *im.QuotedMessage {
+func parseDingTalkQuote(raw string, botUserID string) *im.QuotedMessage {
 	var body struct {
 		Text struct {
 			RepliedMsg struct {
@@ -142,9 +142,11 @@ func parseDingTalkQuote(raw string) *im.QuotedMessage {
 	}
 
 	msgID, content, createdAt := "", "", int64(0)
+	senderID, msgType := "", ""
 	if replied := body.Text.RepliedMsg; replied.MsgID != "" || len(replied.Content) > 0 || replied.CreatedAt > 0 {
 		msgID, createdAt = replied.MsgID, replied.CreatedAt
 		content = extractQuotedText(replied.Content)
+		senderID, msgType = replied.SenderID, replied.MsgType
 	} else if quoted := body.Content.Quoted; quoted.MsgID != "" || quoted.CreatedAt > 0 || quoted.CardCreated > 0 {
 		msgID = quoted.MsgID
 		switch {
@@ -158,7 +160,17 @@ func parseDingTalkQuote(raw string) *im.QuotedMessage {
 	if msgID == "" && content == "" && createdAt == 0 {
 		return nil
 	}
-	quote := &im.QuotedMessage{MessageID: msgID, Content: content}
+	// 只有引用机器人自己的回复才算"指定那一轮"；引用别人的消息一律视为没有引用。
+	// senderId 能对上机器人身份时最可靠；拿不到时退一步用 interactiveCard 判断
+	// （群里只有机器人会发卡片消息）。
+	isBot := false
+	if senderID != "" && botUserID != "" {
+		isBot = senderID == botUserID
+	} else if msgType == "interactiveCard" {
+		isBot = true
+	}
+
+	quote := &im.QuotedMessage{MessageID: msgID, Content: content, SenderID: senderID, IsBotMessage: isBot}
 	if createdAt > 0 {
 		quote.CreatedAt = time.UnixMilli(createdAt)
 	}

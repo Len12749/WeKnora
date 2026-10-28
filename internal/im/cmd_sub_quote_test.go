@@ -42,7 +42,7 @@ func TestResolveTicketTarget_ByQuoteTime(t *testing.T) {
 
 	svc := &Service{db: db}
 	// 引用「第一答」（钉钉给的发送时间）
-	quote := &QuotedMessage{CreatedAt: base.Add(6 * time.Second)}
+	quote := &QuotedMessage{CreatedAt: base.Add(6 * time.Second), IsBotMessage: true}
 	q, a, err := svc.resolveTicketTarget(context.Background(), "s1", quote)
 	if err != nil {
 		t.Fatal(err)
@@ -61,13 +61,33 @@ func TestResolveTicketTarget_ByQuoteContent(t *testing.T) {
 	addMsg(t, db, "m4", "assistant", "T+1 到账。", base.Add(10*time.Minute+5*time.Second))
 
 	svc := &Service{db: db}
-	quote := &QuotedMessage{Content: "包赔挂在订单上"}
+	quote := &QuotedMessage{Content: "包赔挂在订单上", IsBotMessage: true}
 	q, a, err := svc.resolveTicketTarget(context.Background(), "s1", quote)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if q != "包赔能转手继承吗" || a != "**包赔**挂在订单上，不能继承。" {
 		t.Fatalf("按引用正文应锁第一轮，实际 %q / %q", q, a)
+	}
+}
+
+func TestResolveTicketTarget_QuoteFromOtherUserFallsBackToLatest(t *testing.T) {
+	db := newQuoteTestDB(t)
+	base := time.Now().Add(-30 * time.Minute)
+	addMsg(t, db, "m1", "user", "第一问", base)
+	addMsg(t, db, "m2", "assistant", "第一答", base.Add(5*time.Second))
+	addMsg(t, db, "m3", "user", "第二问", base.Add(10*time.Minute))
+	addMsg(t, db, "m4", "assistant", "第二答", base.Add(10*time.Minute+5*time.Second))
+
+	svc := &Service{db: db}
+	// 引用的是别人的消息：即使时间能对上第一轮，也必须按"最近一轮"提交
+	quote := &QuotedMessage{CreatedAt: base.Add(6 * time.Second), IsBotMessage: false}
+	q, a, err := svc.resolveTicketTarget(context.Background(), "s1", quote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q != "第二问" || a != "第二答" {
+		t.Fatalf("引用非机器人消息应回落到最近一轮，实际 %q / %q", q, a)
 	}
 }
 

@@ -68,9 +68,7 @@
       </template>
 
       <template #status="{ row }">
-        <t-tag :theme="statusTheme(row.status)" size="small" variant="light-outline">
-          {{ statusLabel(row.status) }}
-        </t-tag>
+        <span class="ticket-badge" :class="`is-${row.status}`">{{ statusLabel(row.status) }}</span>
       </template>
 
       <template #statusUpdated="{ row }">
@@ -111,9 +109,7 @@
     >
       <div v-if="detail" class="ticket-detail">
         <div class="ticket-detail-meta">
-          <t-tag :theme="statusTheme(detail.status)" size="small" variant="light-outline">
-            {{ statusLabel(detail.status) }}
-          </t-tag>
+          <span class="ticket-badge" :class="`is-${detail.status}`">{{ statusLabel(detail.status) }}</span>
           <span>{{ t('ticket.submittedAt') }}：{{ formatTime(detail.created_at) }}</span>
           <span>{{ t('ticket.submitter') }}：{{ detail.submitter_name || detail.submitter_id || '—' }}</span>
           <span>{{ t('ticket.source') }}：{{ detail.platform || '—' }}</span>
@@ -248,24 +244,19 @@ const statusOptions: Array<{ label: string; value: TicketStatus }> = [
 const filterStatusOptions = computed(() => [{ label: t('ticket.status.all'), value: '' }, ...statusOptions])
 const changeStatusOptions = computed(() => statusOptions)
 
-const columns: PrimaryTableCol[] = [
-  { colKey: 'row-select', type: 'multiple', width: 48 },
+const columns = computed<PrimaryTableCol[]>(() => [
+  // 勾选列只给能批量删除的人，普通成员看不到无意义的选择框
+  ...(canManage.value ? [{ colKey: 'row-select', type: 'multiple', width: 48 } as PrimaryTableCol] : []),
   { colKey: 'createdAt', title: t('ticket.columns.submittedAt'), width: 170 },
   { colKey: 'submitter', title: t('ticket.columns.submitter'), width: 140 },
   { colKey: 'platform', title: t('ticket.columns.source'), width: 110 },
   { colKey: 'status', title: t('ticket.columns.status'), width: 110 },
   { colKey: 'statusUpdated', title: t('ticket.columns.statusUpdated'), width: 200 },
   { colKey: 'actions', title: t('ticket.columns.actions'), width: 140, fixed: 'right' },
-]
+])
 
 function statusLabel(status: TicketStatus) {
   return t(`ticket.status.${status}`)
-}
-
-function statusTheme(status: TicketStatus): 'default' | 'primary' | 'success' | 'warning' | 'danger' {
-  if (status === 'in_progress') return 'primary'
-  if (status === 'resolved') return 'success'
-  return 'warning'
 }
 
 function statusActor(ticket: Ticket) {
@@ -481,6 +472,40 @@ onMounted(load)
 
 .ticket-status-filter {
   width: 160px;
+}
+
+.ticket-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.ticket-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ticket-badge.is-pending {
+  color: #ef9d1f;
+  background: rgba(239, 157, 31, 0.12);
+}
+
+.ticket-badge.is-in_progress {
+  color: #0052d9;
+  background: rgba(0, 82, 217, 0.1);
+}
+
+.ticket-badge.is-resolved {
+  color: #2ba471;
+  background: rgba(43, 164, 113, 0.12);
 }
 
 .ticket-time,

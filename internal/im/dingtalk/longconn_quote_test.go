@@ -38,7 +38,7 @@ const textQuotePayload = `{
 }`
 
 func TestParseDingTalkQuote_CardReply(t *testing.T) {
-	quote := parseDingTalkQuote(cardQuotePayload)
+	quote := parseDingTalkQuote(cardQuotePayload, "$:LWCP_v1:$abc")
 	if quote == nil {
 		t.Fatal("卡片引用应能解析")
 	}
@@ -54,7 +54,7 @@ func TestParseDingTalkQuote_CardReply(t *testing.T) {
 }
 
 func TestParseDingTalkQuote_TextReply(t *testing.T) {
-	quote := parseDingTalkQuote(textQuotePayload)
+	quote := parseDingTalkQuote(textQuotePayload, "bot-user-id")
 	if quote == nil {
 		t.Fatal("文本引用应能解析")
 	}
@@ -66,8 +66,20 @@ func TestParseDingTalkQuote_TextReply(t *testing.T) {
 	}
 }
 
+func TestParseDingTalkQuote_QuoteFromAnotherUserIsNotBot(t *testing.T) {
+	// 引用同事的一条文本消息：能解析出引用，但必须标记为非机器人
+	payload := `{"msgtype":"text","text":{"content":"/sub 别人的消息","repliedMsg":{"msgId":"msg-x","senderId":"user-123","createdAt":1793174400000,"content":"同事说的话"}}}`
+	quote := parseDingTalkQuote(payload, "bot-user-id")
+	if quote == nil {
+		t.Fatal("应能解析出引用")
+	}
+	if quote.IsBotMessage {
+		t.Fatal("引用同事的消息不该标记为机器人回复")
+	}
+}
+
 func TestParseDingTalkQuote_NotAReply(t *testing.T) {
-	if quote := parseDingTalkQuote(`{"msgtype":"text","text":{"content":"/sub 无引用"}}`); quote != nil {
+	if quote := parseDingTalkQuote(`{"msgtype":"text","text":{"content":"/sub 无引用"}}`, "bot-user-id"); quote != nil {
 		t.Fatalf("非引用消息不该产出 quote: %+v", quote)
 	}
 }
