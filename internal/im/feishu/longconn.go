@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/im"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -43,10 +44,19 @@ func NewLongConnClient(
 			if msg == nil {
 				return nil
 			}
-			if enrich != nil {
-				msg = enrich(ctx, msg, event)
-			}
-			return handler(ctx, msg)
+			// 先 ACK 再处理：补全（回查引用消息、通讯录）要打飞书接口，
+			// 同步做会超过飞书的重试阈值，导致同一条消息被反复投递、/sub 回多次。
+			go func() {
+				runCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				if enrich != nil {
+					msg = enrich(runCtx, msg, event)
+				}
+				if err := handler(runCtx, msg); err != nil {
+					logger.Errorf(runCtx, "[%s] handle message failed: %v", region.Label, err)
+				}
+			}()
+			return nil
 		})
 
 	sdkLogger := &feishuLoggerAdapter{region: region, appID: appID}

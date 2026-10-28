@@ -45,7 +45,7 @@ const (
 	imCancelledFallback = "抱歉，回答已被取消。"
 
 	// dedupTTL is how long processed message IDs are retained.
-	dedupTTL = 5 * time.Minute
+	dedupTTL = 30 * time.Minute
 	// dedupCleanupInterval is how often the dedup map is cleaned.
 	dedupCleanupInterval = 1 * time.Minute
 	// maxContentLength is the maximum allowed message content length.

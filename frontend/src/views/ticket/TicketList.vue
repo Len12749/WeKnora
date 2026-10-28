@@ -60,7 +60,7 @@
       </template>
 
       <template #submitter="{ row }">
-        <span>{{ row.submitter_name || row.submitter_id || '—' }}</span>
+        <span :title="row.submitter_id">{{ submitterLabel(row) }}</span>
       </template>
 
       <template #platform="{ row }">
@@ -111,7 +111,7 @@
         <div class="ticket-detail-meta">
           <span class="ticket-badge" :class="`is-${detail.status}`">{{ statusLabel(detail.status) }}</span>
           <span>{{ t('ticket.submittedAt') }}：{{ formatTime(detail.created_at) }}</span>
-          <span>{{ t('ticket.submitter') }}：{{ detail.submitter_name || detail.submitter_id || '—' }}</span>
+          <span :title="detail.submitter_id">{{ t('ticket.submitter') }}：{{ submitterLabel(detail) }}</span>
           <span>{{ t('ticket.source') }}：{{ detail.platform || '—' }}</span>
         </div>
 
@@ -257,6 +257,31 @@ const columns = computed<PrimaryTableCol[]>(() => [
 
 function statusLabel(status: TicketStatus) {
   return t(`ticket.status.${status}`)
+}
+
+// IM 平台标识 → 中文名，用于把 open_id 之类的一长串美化成「飞书用户·4cea」。
+const PLATFORM_LABELS: Record<string, string> = {
+  feishu: '飞书',
+  lark: '飞书',
+  dingtalk: '钉钉',
+  wecom: '企业微信',
+  slack: 'Slack',
+  telegram: 'Telegram',
+  mattermost: 'Mattermost',
+  qqbot: 'QQ',
+}
+
+function submitterLabel(ticket: Ticket) {
+  if (ticket.submitter_name) return ticket.submitter_name
+  const raw = (ticket.submitter_id || '').trim()
+  if (!raw) return '—'
+  const label = PLATFORM_LABELS[(ticket.platform || '').toLowerCase()] || 'IM'
+  const cleaned = raw
+    .replace(/^ou_/, '')
+    .replace(/^on_/, '')
+    .replace(/^\$:LWCP_v1:\$/, '')
+  const short = cleaned.slice(0, 4)
+  return short ? `${label}用户·${short}` : `${label}用户`
 }
 
 function statusActor(ticket: Ticket) {
