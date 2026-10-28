@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -100,6 +101,10 @@ type QuotedMessage struct {
 	// Empty when Content is populated. Used to generate LLM instructions
 	// instead of content placeholders that cause hallucination.
 	NonTextType string
+	// CreatedAt is when the quoted message was sent, when the platform
+	// reports it. DingTalk supplies it, which lets /sub locate the exact
+	// turn the user replied to even without the message body.
+	CreatedAt time.Time
 }
 
 // ChatType represents the IM chat type.

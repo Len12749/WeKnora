@@ -144,6 +144,12 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          path: "tickets",
+          name: "ticketList",
+          component: () => import("../views/ticket/TicketList.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "automations/:automationId?",
           name: "automationList",
           component: () => import("../views/automation/AutomationList.vue"),

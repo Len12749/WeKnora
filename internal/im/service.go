@@ -519,6 +519,10 @@ type Service struct {
 	tenantService  interfaces.TenantService
 	agentService   interfaces.CustomAgentService
 
+	// ticketService backs the /sub command: it persists the current Q&A pair
+	// as a feedback ticket that admins triage from the Web console.
+	ticketService interfaces.TicketService
+
 	// knowledgeService is used for saving IM file messages to knowledge bases.
 	knowledgeService interfaces.KnowledgeService
 
@@ -1083,12 +1087,13 @@ func NewService(
 	redisClient *redis.Client,
 	appCfg *config.Config,
 	storageResolver interfaces.StorageBackendResolver,
+	ticketService interfaces.TicketService,
 ) *Service {
 	// Resolve IM configuration with defaults.
 	workers, maxQueue, maxPerUser, globalMaxWorkers, rlWindow, rlMax := resolveIMConfig(appCfg)
 
 	// Build command registry.
-	// 只保留 /help 与 /clear：IM 侧不暴露 /info、/search、/stop。
+	// 只保留 /help、/clear 与 /sub：IM 侧不暴露 /info、/search、/stop。
 	registry := NewCommandRegistry()
 	registry.Register(newHelpCommand(registry))
 	registry.Register(newClearCommand())
@@ -1102,6 +1107,7 @@ func NewService(
 		agentService:     agentService,
 		knowledgeService: knowledgeService,
 		kbService:        kbService,
+		ticketService:    ticketService,
 		streamManager:    streamManager,
 		defaultFileSvc:   defaultFileSvc,
 		documentReader:   documentReader,
@@ -1117,6 +1123,9 @@ func NewService(
 		instanceID:       instanceID,
 		stopCh:           make(chan struct{}),
 	}
+
+	// /sub 需要在 Service 构造完成后注册：命令体要反查本会话的历史消息。
+	s.cmdRegistry.Register(newTicketCommand(s))
 
 	// Initialize the QA worker pool and bounded queue.
 	s.qaQueue = newQAQueue(workers, maxQueue, maxPerUser, globalMaxWorkers, s.executeQARequest, redisClient)

@@ -32,11 +32,15 @@ export const useMenuStore = defineStore('menuStore', () => {
     },
     { title: '', titleKey: 'menu.knowledgeBase', icon: 'zhishiku', path: 'knowledge-bases' },
     // Artifacts only exist where skills run in a sandbox.
-    { title: '', titleKey: 'menu.artifacts', icon: 'artifact', path: 'artifacts', requiredCapability: 'settings.sandbox' },
+    // 暂时屏蔽入口：产物（按需求只保留 新对话/知识库/智能体/工具箱/工单记录）
+    // { title: '', titleKey: 'menu.artifacts', icon: 'artifact', path: 'artifacts', requiredCapability: 'settings.sandbox' },
     { title: '', titleKey: 'menu.agents', icon: 'agent', path: 'agents', requiredCapability: 'agents' },
-    { title: '', titleKey: 'menu.automations', icon: 'automation', path: 'automations' },
+    // 暂时屏蔽入口：自动化
+    // { title: '', titleKey: 'menu.automations', icon: 'automation', path: 'automations' },
     { title: '', titleKey: 'toolbox.title', icon: 'toolbox', path: 'toolbox' },
-    { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations', requiredCapability: 'organizations' },
+    { title: '', titleKey: 'menu.tickets', icon: 'ticket', path: 'tickets' },
+    // 暂时屏蔽入口：共享空间
+    // { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations', requiredCapability: 'organizations' },
     { title: '', titleKey: 'menu.settings', icon: 'setting', path: 'settings' },
     { title: '', titleKey: 'menu.logout', icon: 'logout', path: 'logout' }
   ])

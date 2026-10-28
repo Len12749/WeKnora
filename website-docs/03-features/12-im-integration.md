@@ -38,8 +38,9 @@ IM 集成将智能体接入企业微信、飞书、钉钉、Slack、Telegram 等
 | --- | --- | --- | --- |
 | `/help [命令名]` | `cmd_help.go` | 列出全部可用指令，或查看某条指令的详细用法 | 无 |
 | `/clear` | `cmd_clear.go` | 清空对话记忆 | `ActionClear`：软删当前 `ChannelSession`，下一条消息创建全新 WeKnora 会话 |
+| `/sub [理由]` | `cmd_sub.go` | 提交反馈工单：引用某条回答时只锁那一轮（按引用时间/正文匹配），不引用则锁最近一轮；理由单独存 `submit_reason` | 无：只写 `tickets` 表，不改会话 |
 
-> 本分支只注册 `/help` 与 `/clear`。上游版本另有 `/info`、`/search`、`/stop` 三条指令，本分支已移除对应实现；未注册的斜杠词按"未知指令"提示处理。
+> 本分支只注册 `/help`、`/clear`、`/sub`。上游版本另有 `/info`、`/search`、`/stop`，本分支已移除对应实现；未注册的斜杠词按"未知指令"提示处理。
 
 ## 群聊与私聊行为
 
