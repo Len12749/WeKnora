@@ -85,17 +85,14 @@ func (c *TicketCommand) Execute(
 
 // resolveTicketTarget 决定 /sub 要锁哪一轮问答。
 //
-// 优先用引用消息定位：钉钉会给被引用消息的发送时间（有时还带正文），
-// 按时间找最近的那条 assistant 消息，比"最近一轮"精确得多。
-// 拿不到引用信息时退回到最近一轮。
+// 只有"引用机器人的回答"才用于定位那一轮（和钉钉一致）；没引用、引用别人的
+// 消息、引用自己的问题，一律按最近一轮提交，避免错配。
 func (s *Service) resolveTicketTarget(
 	ctx context.Context,
 	sessionID string,
 	quote *QuotedMessage,
 ) (string, string, error) {
-	// 只有"引用机器人的回复"才用于定位那一轮；引用别人的消息、或压根没引用，
-	// 都按最近一轮提交，避免把别人的问答错配进来。
-	if quote == nil || !quote.IsBotMessage || (quote.CreatedAt.IsZero() && strings.TrimSpace(quote.Content) == "") {
+	if quote == nil || !quote.IsBotMessage {
 		return s.latestQAPair(ctx, sessionID)
 	}
 
@@ -104,40 +101,62 @@ func (s *Service) resolveTicketTarget(
 		return "", "", err
 	}
 
+	// 1) 按引用时间定位（钉钉/飞书都会给被引用消息的时间）
 	if !quote.CreatedAt.IsZero() {
-		best, bestDiff := -1, 5*time.Minute
-		for i, msg := range messages {
-			if msg.Role != "assistant" {
-				continue
-			}
-			diff := msg.CreatedAt.Sub(quote.CreatedAt)
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff < bestDiff {
-				best, bestDiff = i, diff
-			}
-		}
-		if best >= 0 {
-			question, answer := pairAround(messages, best)
-			if answer != "" {
-				return question, answer, nil
+		if idx := nearestAssistantMessage(messages, quote.CreatedAt); idx >= 0 {
+			if q, a := answerWithQuestion(messages, idx); a != "" {
+				return q, a, nil
 			}
 		}
 	}
 
+	// 2) 按引用正文兜底
 	if content := normalizeQuoteText(quote.Content); content != "" {
 		for i, msg := range messages {
-			if msg.Role == "assistant" && strings.Contains(normalizeQuoteText(msg.Content), content) {
-				question, answer := pairAround(messages, i)
-				if answer != "" {
-					return question, answer, nil
+			if msg.Role != "assistant" {
+				continue
+			}
+			if strings.Contains(normalizeQuoteText(msg.Content), content) {
+				if q, a := answerWithQuestion(messages, i); a != "" {
+					return q, a, nil
 				}
 			}
 		}
 	}
 
 	return s.latestQAPair(ctx, sessionID)
+}
+
+// nearestAssistantMessage 找时间上最接近 at 的回答，容差 5 分钟。
+func nearestAssistantMessage(messages []types.Message, at time.Time) int {
+	best, bestDiff := -1, 5*time.Minute
+	for i, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		diff := msg.CreatedAt.Sub(at)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			best, bestDiff = i, diff
+		}
+	}
+	return best
+}
+
+// answerWithQuestion 以第 idx 条 assistant 为锚，向上找它对应的问题。
+func answerWithQuestion(messages []types.Message, idx int) (string, string) {
+	if idx < 0 || idx >= len(messages) {
+		return "", ""
+	}
+	answer := messages[idx].Content
+	for i := idx - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
+			return messages[i].Content, answer
+		}
+	}
+	return "", answer
 }
 
 // recentMessagesAsc 取最近 limit 条消息并按时间升序返回，便于向前找问题。
@@ -158,20 +177,6 @@ func (s *Service) recentMessagesAsc(ctx context.Context, sessionID string, limit
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return messages, nil
-}
-
-// pairAround 从第 idx 条 assistant 消息往上找它对应的问题。
-func pairAround(messages []types.Message, idx int) (string, string) {
-	if idx < 0 || idx >= len(messages) {
-		return "", ""
-	}
-	answer := messages[idx].Content
-	for i := idx - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
-			return messages[i].Content, answer
-		}
-	}
-	return "", answer
 }
 
 // normalizeQuoteText 把引用正文压成可比对的短串：去空白、去 markdown 记号。

@@ -16,10 +16,15 @@ import (
 // MessageHandler is called when an IM message is received via long connection.
 type MessageHandler func(ctx context.Context, msg *im.IncomingMessage) error
 
+// EventEnricher 在消息交给业务层之前补全平台没直接给的信息：
+// 引用回复的目标消息、发送人昵称。event 保留原始事件以便拿到 parent_id 等字段。
+type EventEnricher func(ctx context.Context, msg *im.IncomingMessage, event *larkim.P2MessageReceiveV1) *im.IncomingMessage
+
 // LongConnClient manages a Feishu/Lark WebSocket long connection.
 type LongConnClient struct {
 	region   Region
 	appID    string
+	enrich   EventEnricher
 	wsClient *larkws.Client
 }
 
@@ -27,7 +32,9 @@ type LongConnClient struct {
 // apiBaseURL overrides the SDK's bootstrap domain (empty uses the region
 // default); set it to a reverse-proxy origin for private/internal deployments.
 // When a message arrives, it converts it to IncomingMessage and calls handler.
-func NewLongConnClient(region Region, appID, appSecret, apiBaseURL string, handler MessageHandler) *LongConnClient {
+func NewLongConnClient(
+	region Region, appID, appSecret, apiBaseURL string, handler MessageHandler, enrich EventEnricher,
+) *LongConnClient {
 	// Long connection mode does not require verificationToken or encryptKey;
 	// those are only used for webhook signature verification and decryption.
 	eventHandler := dispatcher.NewEventDispatcher("", "").
@@ -35,6 +42,9 @@ func NewLongConnClient(region Region, appID, appSecret, apiBaseURL string, handl
 			msg := convertEvent(region, event)
 			if msg == nil {
 				return nil
+			}
+			if enrich != nil {
+				msg = enrich(ctx, msg, event)
 			}
 			return handler(ctx, msg)
 		})
@@ -56,7 +66,7 @@ func NewLongConnClient(region Region, appID, appSecret, apiBaseURL string, handl
 		larkws.WithDomain(apiBaseURL),
 	)
 
-	return &LongConnClient{region: region, appID: appID, wsClient: wsClient}
+	return &LongConnClient{region: region, appID: appID, enrich: enrich, wsClient: wsClient}
 }
 
 // Start begins the WebSocket long connection. It blocks until ctx is cancelled.

@@ -376,6 +376,16 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 		openID = eventBody.Event.Sender.SenderID.OpenID
 	}
 
+	// 回复消息只带 parent_id，内容和时间要回查一次；名字也要查通讯录。
+	// 两者都是尽力而为，失败不影响消息处理。
+	ctx := c.Request.Context()
+	quote := a.fetchQuoteForReply(ctx, msg.ParentID)
+	senderName := a.resolveSenderName(ctx, openID)
+	if msg.ParentID != "" {
+		logger.Infof(ctx, "[%s] reply event: msg_id=%s parent_id=%s root_id=%s quote_ok=%v quote_from_bot=%v",
+			a.region.Label, msg.MessageID, msg.ParentID, msg.RootID, quote != nil, quote != nil && quote.IsBotMessage)
+	}
+
 	switch msg.MessageType {
 	case "text":
 		// Parse text content
@@ -403,11 +413,13 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 			Platform:    a.region.Platform,
 			MessageType: im.MessageTypeText,
 			UserID:      openID,
+			UserName:    senderName,
 			ChatID:      chatID,
 			ChatType:    chatType,
 			Content:     strings.TrimSpace(content),
 			MessageID:   msg.MessageID,
 			ThreadID:    threadID,
+			Quote:       quote,
 		}, nil
 
 	case "file":
@@ -425,10 +437,12 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 			Platform:    a.region.Platform,
 			MessageType: im.MessageTypeFile,
 			UserID:      openID,
+			UserName:    senderName,
 			ChatID:      chatID,
 			ChatType:    chatType,
 			MessageID:   msg.MessageID,
 			ThreadID:    threadID,
+			Quote:       quote,
 			FileKey:     fileContent.FileKey,
 			FileName:    fileContent.FileName,
 		}, nil
@@ -447,10 +461,12 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 			Platform:    a.region.Platform,
 			MessageType: im.MessageTypeImage,
 			UserID:      openID,
+			UserName:    senderName,
 			ChatID:      chatID,
 			ChatType:    chatType,
 			MessageID:   msg.MessageID,
 			ThreadID:    threadID,
+			Quote:       quote,
 			FileKey:     imageContent.ImageKey,
 			FileName:    imageContent.ImageKey + ".png",
 		}, nil
@@ -509,11 +525,13 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 			Platform:    a.region.Platform,
 			MessageType: im.MessageTypeText,
 			UserID:      openID,
+			UserName:    senderName,
 			ChatID:      chatID,
 			ChatType:    chatType,
 			Content:     content,
 			MessageID:   msg.MessageID,
 			ThreadID:    threadID,
+			Quote:       quote,
 		}, nil
 
 	default:

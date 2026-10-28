@@ -41,7 +41,7 @@ func NewFactory(region Region) im.AdapterFactory {
 			return adapter, nil, nil
 
 		case "websocket":
-			client := NewLongConnClient(region, appID, appSecret, apiBaseURL, msgHandler)
+			client := NewLongConnClient(region, appID, appSecret, apiBaseURL, msgHandler, adapter.enrichIncoming)
 
 			wsCtx, wsCancel := context.WithCancel(context.Background())
 			go func() {
