@@ -32,7 +32,7 @@ func newTicketCommand(svc *Service) *TicketCommand {
 func (c *TicketCommand) Name() string { return "sub" }
 
 func (c *TicketCommand) Description() string {
-	return "提交工单：可回复某条回答只锁那一轮，也可附上理由，例如：/sub 知识库里没有陪玩"
+	return "提交工单：可回复某条回答只锁那一轮，也可附上理由，例如：`/sub 知识库里没有陪玩`"
 }
 
 func (c *TicketCommand) Execute(
