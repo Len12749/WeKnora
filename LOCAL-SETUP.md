@@ -19,7 +19,7 @@ Ollama 同理，label 为 `com.sen.kbharness.ollama`（`bge-m3`，开 flash atte
 `operation not permitted: .env.lite`，环境变量读不进来就 panic。
 
 - UI / API：<http://127.0.0.1:8080>
-- 账号：`Len12749` / 登录邮箱 `Len12749@local.test`
+- 账号：用户名 `kjlmadmin` / 登录邮箱 `kjlmadmin@local.test`（密码见 kjlm-weknora 的凭据文件）
 - 数据：`~/Library/Application Support/kbharness/weknora/data/`（`weknora.db`、`files/`）
 - 日志：`~/Library/Logs/kbharness/{weknora,ollama}.log`
 
