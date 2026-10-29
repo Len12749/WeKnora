@@ -2054,14 +2054,17 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, chann
 		if customAgent != nil && customAgent.Config.ModelID != "" {
 			titleModelID = customAgent.Config.ModelID
 		}
-		s.sessionService.GenerateTitleAsync(sessionCtx, &sessionForTitle, msg.Content, titleModelID, nil)
+		s.sessionService.GenerateTitleAsync(imOutboundContext(sessionCtx), &sessionForTitle, msg.Content, titleModelID, nil)
 	}
 
 	s.persistIMLastRequestState(sessionCtx, session.ID, agentID, customAgent, nil)
 
 	// 5. Enqueue the QA request into the bounded worker pool.
 	// The worker pool controls LLM concurrency and provides backpressure.
-	qaCtx, qaCancel := context.WithCancel(sessionCtx)
+	// 排队任务必须脱离请求上下文：飞书长连接是「先 ACK 再异步处理」，handler 一返回
+	// 调用方的 defer cancel() 就会取消请求 ctx；任务若继承它，出队时会被当成已取消
+	// 静默丢弃（用户看到的就是发了消息没回）。
+	qaCtx, qaCancel := context.WithCancel(imOutboundContext(sessionCtx))
 	userKey := makeUserKey(channelID, msg.UserID, msg.ChatID, threadID)
 
 	req := &qaRequest{

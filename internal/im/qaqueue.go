@@ -227,6 +227,9 @@ func (q *qaQueue) runWorker(id int) {
 		if req.ctx.Err() != nil {
 			q.totalTimeout.Add(1)
 			q.redisDecrUser(context.Background(), req.userKey)
+			// 这条日志曾经缺位：请求 ctx 被连带取消时消息在这里静默消失，
+			// 用户侧表现为机器人不回话。
+			logger.Warnf(context.Background(), "[IM] Queued request cancelled before start: user=%s", req.msg.UserID)
 			continue
 		}
 
