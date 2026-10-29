@@ -27,14 +27,58 @@ func newTicketTestService(t *testing.T) (*ticketService, *gorm.DB) {
 		}
 	})
 
-	sqlBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "sqlite", "000052_ticket.up.sql"))
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
-	}
-	if err := db.Exec(string(sqlBytes)).Error; err != nil {
-		t.Fatalf("apply migration: %v", err)
+	// 按顺序应用工单相关的 sqlite 迁移（建表 → 提交理由 → 幂等键）。
+	for _, name := range []string{
+		"000052_ticket.up.sql",
+		"000053_ticket_submit_reason.up.sql",
+		"000055_ticket_message_id.up.sql",
+	} {
+		sqlBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "sqlite", name))
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		if err := db.Exec(string(sqlBytes)).Error; err != nil {
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
 	}
 	return &ticketService{db: db}, db
+}
+
+// TestTicketServiceCreateIsIdempotentPerMessage 覆盖事故场景：同一条 IM 消息被
+// 重投多次（哪怕去重记录已过期）也只能落一张工单。
+func TestTicketServiceCreateIsIdempotentPerMessage(t *testing.T) {
+	svc, db := newTicketTestService(t)
+	ctx := context.Background()
+
+	newTicket := func(id string) *types.Ticket {
+		return &types.Ticket{
+			ID:           id,
+			TenantID:     1,
+			Platform:     "feishu",
+			SessionID:    "s-1",
+			Question:     "你好",
+			Answer:       "你好！",
+			SubmitterID:  "ou_4cea",
+			SubmitReason: "测试",
+			MessageID:    "om_x100b612f314aa4b8c1b95c0d842885b",
+		}
+	}
+
+	if err := svc.Create(ctx, newTicket("t-1")); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	// 重投：内容一样、id 不同，但 message_id 相同，应当静默忽略。
+	if err := svc.Create(ctx, newTicket("t-2")); err != nil {
+		t.Fatalf("duplicate create must not fail: %v", err)
+	}
+
+	var count int64
+	if err := db.Model(&types.Ticket{}).Where("message_id = ?", newTicket("x").MessageID).Count(&count).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("同一条消息只应落一张工单，实际 %d", count)
+	}
 }
 
 func TestTicketServiceLifecycle(t *testing.T) {

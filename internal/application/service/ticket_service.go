@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
@@ -31,7 +33,16 @@ func (s *ticketService) Create(ctx context.Context, ticket *types.Ticket) error 
 	if ticket.Status == "" {
 		ticket.Status = types.TicketStatusPending
 	}
-	return s.db.WithContext(ctx).Create(ticket).Error
+	// 幂等：平台重投同一条 IM 消息时，第二次插入会撞上 uk_tickets_message_id，
+	// 这里直接当成成功，避免一条 /sub 落出多张工单。
+	res := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(ticket)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		logger.Infof(ctx, "[ticket] duplicate submit ignored: message_id=%s", ticket.MessageID)
+	}
+	return nil
 }
 
 func (s *ticketService) Get(ctx context.Context, tenantID uint64, id string) (*types.Ticket, error) {

@@ -70,6 +70,8 @@ func (c *TicketCommand) Execute(
 		SubmitterName: cmdCtx.Incoming.UserName,
 		SubmitReason:  reason,
 		Status:        types.TicketStatusPending,
+		// 幂等键：同一条 IM 消息重复投递时不重复建单。
+		MessageID: cmdCtx.Incoming.MessageID,
 	}
 	if err := c.svc.ticketService.Create(ctx, ticket); err != nil {
 		logger.Warnf(ctx, "[IM] /sub 创建工单失败: session=%s err=%v", cmdCtx.Session.SessionID, err)

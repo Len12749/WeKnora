@@ -44,9 +44,11 @@ const (
 	imErrorFallback     = "抱歉，处理您的问题时出现了异常，请稍后再试。"
 	imCancelledFallback = "抱歉，回答已被取消。"
 
-	// dedupTTL is how long processed message IDs are retained.
-	dedupTTL = 30 * time.Minute
-	// dedupCleanupInterval is how often the dedup map is cleaned.
+	// dedupTTL is how long processed message IDs are retained. It has to cover
+	// late platform redeliveries: the same Feishu message was measured arriving
+	// again 2 hours after the first delivery.
+	dedupTTL = 24 * time.Hour
+	// dedupCleanupInterval is how often expired dedup records are purged.
 	dedupCleanupInterval = 1 * time.Minute
 	// maxContentLength is the maximum allowed message content length.
 	maxContentLength = 4096
@@ -1132,8 +1134,8 @@ func NewService(
 	s.qaQueue.Start(s.stopCh)
 
 	// Start periodic cleanup loops.
-	// Dedup cleanup is only needed in single-instance mode (local sync.Map);
-	// when Redis handles dedup, the TTL on Redis keys handles expiry automatically.
+	// Dedup records live in DB (or the local map when the DB is unavailable);
+	// with Redis in front, the TTL on the keys handles expiry instead.
 	if redisClient == nil {
 		go s.dedupCleanupLoop()
 	}
@@ -1181,7 +1183,7 @@ func (s *Service) Stop() {
 	})
 }
 
-// dedupCleanupLoop periodically cleans up expired entries from the dedup map.
+// dedupCleanupLoop periodically purges expired dedup records.
 func (s *Service) dedupCleanupLoop() {
 	ticker := time.NewTicker(dedupCleanupInterval)
 	defer ticker.Stop()
@@ -1195,6 +1197,7 @@ func (s *Service) dedupCleanupLoop() {
 				}
 				return true
 			})
+			s.purgeClaimedMessages(context.Background(), cutoff)
 		case <-s.stopCh:
 			return
 		}
@@ -1882,37 +1885,12 @@ func (s *Service) GetChannelByIDAndTenant(channelID string, tenantID uint64) (*I
 	return &ch, nil
 }
 
-// isDuplicate checks if a message has already been processed.
-//
-// Multi-instance mode (Redis available): uses Redis SetNX for cross-instance
-// deduplication. If Redis fails, returns true (fail-closed) to prevent
-// duplicate processing across instances — a dropped message can be retried
-// by the user, but a duplicate LLM response wastes resources and confuses.
-//
-// Single-instance mode (no Redis): uses a local sync.Map, which is sufficient
-// when only one instance receives messages.
-func (s *Service) isDuplicate(ctx context.Context, messageID string) bool {
-	if s.redis != nil {
-		key := RedisKeyDedup + messageID
-		ok, err := s.redis.SetNX(ctx, key, "1", dedupTTL).Result()
-		if err == nil {
-			return !ok // SetNX returns true when key was newly set (not a duplicate)
-		}
-		// Redis is configured but failed — fail-closed to avoid cross-instance
-		// duplicate processing. The user can simply resend the message.
-		logger.Errorf(ctx, "[IM] Redis dedup failed (fail-closed, message dropped): %v", err)
-		return true
-	}
-	// Single-instance mode: local dedup is sufficient.
-	_, loaded := s.processedMsgs.LoadOrStore(messageID, time.Now())
-	return loaded
-}
-
 // HandleMessage processes an incoming IM message end-to-end using channel config.
 func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, channelID string) error {
-	// Dedup: skip if this message was already processed (IM platforms may retry)
+	// Dedup: skip if this message was already processed (IM platforms may retry).
+	// 去重状态落库，重启后依然有效——迟到的重投会跨进程、跨小时到达。
 	if msg.MessageID != "" {
-		if s.isDuplicate(ctx, msg.MessageID) {
+		if !s.claimMessage(ctx, msg.MessageID, string(msg.Platform), channelID) {
 			logger.Infof(ctx, "[IM] Skipping duplicate message: %s", msg.MessageID)
 			return nil
 		}

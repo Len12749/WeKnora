@@ -55,6 +55,9 @@ type Ticket struct {
 	SubmitterName string `json:"submitter_name" gorm:"type:varchar(128)"`
 	// SubmitReason 是提交时 /sub 后面跟的那句话，说明为什么觉得回答有问题。
 	SubmitReason string `json:"submit_reason" gorm:"type:text"`
+	// MessageID 是触发 /sub 的那条 IM 消息 id，同时充当幂等键：
+	// 平台把同一条消息重投多次时，也只落一张工单（唯一索引见 000055 迁移）。
+	MessageID string `json:"message_id" gorm:"type:varchar(128)"`
 
 	Status TicketStatus `json:"status" gorm:"type:varchar(32);index;default:pending"`
 	// StatusUpdatedAt / By / ByName 记录"上一次改状态"的时间与人。
