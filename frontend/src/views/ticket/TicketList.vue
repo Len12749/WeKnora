@@ -159,6 +159,7 @@
           <t-textarea
             v-if="canManage"
             v-model="draftNote"
+            class="ticket-note"
             :autosize="{ minRows: 2, maxRows: 6 }"
             :placeholder="t('ticket.notePlaceholder')"
           />
@@ -594,6 +595,19 @@ onMounted(load)
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 备注框：与只读态的快照块保持同样内边距，未 hover 时也看得见边框 */
+.ticket-note :deep(.t-textarea__inner) {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px;
+  border-color: var(--td-gray-color-4);
+  overflow-wrap: anywhere;
+}
+
+.ticket-note :deep(.t-textarea__inner:hover) {
+  border-color: var(--td-brand-color);
 }
 
 .ticket-detail-actions {
